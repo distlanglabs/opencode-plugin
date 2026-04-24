@@ -7,12 +7,24 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+function distlangBinary() {
+  return process.env.DISTLANG_BIN && process.env.DISTLANG_BIN.trim() !== ""
+    ? process.env.DISTLANG_BIN.trim()
+    : "distlang";
+}
+
 export async function runDistlang(args, options = {}) {
-  return execFileAsync("distlang", args, {
+  return execFileAsync(distlangBinary(), args, {
     env: process.env,
     maxBuffer: 16 * 1024 * 1024,
     ...options,
   });
+}
+
+export function distlangCommandInfo() {
+  return {
+    bin: distlangBinary(),
+  };
 }
 
 export async function getAuthStatus() {

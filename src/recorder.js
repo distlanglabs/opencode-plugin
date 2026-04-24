@@ -303,6 +303,7 @@ export function createRecorder({ project, directory }) {
   }
 
   return {
+    activeSessionID,
     observeSessionCreated,
     observeFileEdited,
     observeUserMessage,

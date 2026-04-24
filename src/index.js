@@ -1,5 +1,5 @@
 import { createRecorder } from "./recorder.js";
-import { getAuthStatus, uploadAIDebuggerPayload } from "./distlang.js";
+import { distlangCommandInfo, getAuthStatus, uploadAIDebuggerPayload } from "./distlang.js";
 
 function configuredValue(value, fallback = "") {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
@@ -47,6 +47,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     loggedInit = true;
     await log(debug ? "debug" : "info", "Distlang OpenCode AI Debugger plugin initialized", {
       debug,
+      distlang: distlangCommandInfo(),
     });
   }
 
@@ -58,6 +59,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     try {
       const payload = await getAuthStatus();
       authAvailable = payload && payload.ok === true && payload.logged_in === true;
+      await debugLog("Distlang auth status resolved", { authAvailable, payload });
       if (!authAvailable && !authWarningLogged) {
         authWarningLogged = true;
         await log("warn", "Distlang AI Debugger upload disabled: run `distlang helpers login` first", { auth: payload });
@@ -67,7 +69,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       if (error && typeof error === "object" && error.code === "ENOENT") {
         if (!distlangMissingLogged) {
           distlangMissingLogged = true;
-          await log("warn", "distlang CLI not found; AI Debugger upload disabled");
+          await log("warn", "distlang CLI not found; AI Debugger upload disabled", { distlang: distlangCommandInfo() });
         }
       } else if (!authWarningLogged) {
         authWarningLogged = true;
@@ -81,14 +83,23 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   async function finalizeSession(sessionID, result) {
     const payload = recorder.finalizeSession(sessionID, result, Date.now());
     if (!payload) {
+      await debugLog("No payload produced during session finalization", { sessionID, result });
       return;
     }
+    await debugLog("Finalized AI Debugger session payload", {
+      sessionID,
+      result,
+      interactions: Array.isArray(payload.interactions) ? payload.interactions.length : 0,
+      steps: Array.isArray(payload.interactions) ? payload.interactions.reduce((total, interaction) => total + (Array.isArray(interaction.steps) ? interaction.steps.length : 0), 0) : 0,
+      project: payload.project,
+    });
     if (!(await ensureAuthStatus())) {
       await debugLog("Skipping AI debugger upload because auth is unavailable", { sessionID });
       return;
     }
     try {
       const response = await uploadAIDebuggerPayload(payload);
+      await debugLog("AI Debugger upload response received", { sessionID, response });
       if (!response.ok) {
         await log("warn", "AI Debugger upload failed", { sessionID, response });
         return;
@@ -115,8 +126,9 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       }
 
       if (event.type === "session.idle" || event.type === "session.error") {
-        const sessionID = configuredValue(event.sessionID, "");
+        const sessionID = configuredValue(event.sessionID, recorder.activeSessionID());
         if (!sessionID) {
+          await debugLog("Session terminal event missing sessionID", { type: event.type, eventKeys: Object.keys(event) });
           return;
         }
         const result = event.type === "session.error" ? "error" : "success";
