@@ -61,3 +61,38 @@ Step kinds currently emitted when observable:
 npm test
 npm run pack:check
 ```
+
+## Release
+
+This repo uses a manual release flow.
+
+1. Verify the package locally:
+
+```bash
+npm run release
+```
+
+2. Push the release commit:
+
+```bash
+git push origin main
+```
+
+3. Publish to npm:
+
+```bash
+npm run publish
+```
+
+4. Create and push the release tag:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+5. Optional GitHub release:
+
+```bash
+gh release create v0.1.0 --title "v0.1.0"
+```
