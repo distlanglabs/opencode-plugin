@@ -177,6 +177,10 @@ export async function getAuthStatus() {
   return JSON.parse(stdout || "{}");
 }
 
+export async function loginWithDistlang() {
+  return runDistlang(["helpers", "login"]);
+}
+
 export async function uploadAIDebuggerPayload(payload) {
   const tempFile = join(tmpdir(), `distlang-ai-debugger-${randomUUID()}.json`);
   await fs.writeFile(tempFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");

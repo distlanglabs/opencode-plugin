@@ -1,6 +1,6 @@
 import { createRecorder } from "./recorder.js";
 import { extractDistlangInvocation } from "./command.js";
-import { distlangCommandInfo, fetchAIDebuggerSessions, getAuthStatus, resolveDistlangBinary, uploadAIDebuggerPayload } from "./distlang.js";
+import { distlangCommandInfo, fetchAIDebuggerSessions, getAuthStatus, loginWithDistlang, resolveDistlangBinary, uploadAIDebuggerPayload } from "./distlang.js";
 import { pluginStatePath, readPluginState, writePluginState } from "./state.js";
 import { appendFile } from "node:fs/promises";
 
@@ -76,6 +76,18 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 
   async function maybeLogCommandResult(level, message, extra = undefined) {
     await log(level, message, extra);
+    if (client?.tui && typeof client.tui.showToast === "function") {
+      const variant = level === "error" ? "error" : level === "warn" ? "warning" : level === "info" ? "success" : "info";
+      const detail = typeof extra?.error === "string" && extra.error.trim() !== "" ? extra.error.trim() : undefined;
+      await client.tui.showToast({
+        body: {
+          title: "Distlang",
+          message: detail ? `${message}: ${detail}` : message,
+          variant,
+          duration: 5000,
+        },
+      }).catch(() => {});
+    }
   }
 
   async function handleDistlangCommand(invocation, source) {
@@ -98,6 +110,11 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       }
       try {
         auth = await getAuthStatus();
+        if (!auth || auth.ok !== true || auth.logged_in !== true) {
+          await maybeLogCommandResult("info", "Opening browser for Distlang login", { source, action, state, distlang: resolved });
+          await loginWithDistlang();
+          auth = await getAuthStatus();
+        }
       } catch (error) {
         await maybeLogCommandResult("warn", "Distlang uploads enabled, but auth check failed", { source, action, state, distlang: resolved, error: String(error) });
         return;
@@ -316,6 +333,16 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
         return;
       }
       await handleDistlangCommand(invocation, "tui.command.execute");
+    },
+
+    "command.execute.before": async (input, output) => {
+      await logInit();
+      const invocation = extractDistlangInvocation(input);
+      if (!invocation) {
+        return;
+      }
+      await handleDistlangCommand(invocation, "command.execute.before");
+      output.parts = [];
     },
 
     "tool.execute.before": async (input) => {

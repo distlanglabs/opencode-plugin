@@ -52,6 +52,7 @@ export function extractDistlangInvocation(input) {
   const candidates = [
     input,
     input?.event,
+    input?.properties,
     input?.command,
     input?.info,
     input?.properties,

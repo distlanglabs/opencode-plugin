@@ -73,9 +73,6 @@ OpenCode commands are configured separately from plugins, so add a command file 
 ---
 description: Manage Distlang AI Debugger uploads
 ---
-
-Handled locally by the Distlang OpenCode plugin.
-Use `/distlang status`, `/distlang start`, or `/distlang stop`.
 ```
 
 The plugin watches for this command and handles:
@@ -85,6 +82,8 @@ The plugin watches for this command and handles:
 - `/distlang stop`
 
 Command results are written to the OpenCode app log, and also to the debug log file when enabled.
+
+If `/distlang start` finds that Distlang auth is missing, the plugin starts `distlang helpers login`, which opens the browser login flow.
 
 ## Debugging
 
