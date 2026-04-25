@@ -1,5 +1,7 @@
 import { createRecorder } from "./recorder.js";
-import { distlangCommandInfo, getAuthStatus, uploadAIDebuggerPayload } from "./distlang.js";
+import { extractDistlangInvocation } from "./command.js";
+import { distlangCommandInfo, fetchAIDebuggerSessions, getAuthStatus, resolveDistlangBinary, uploadAIDebuggerPayload } from "./distlang.js";
+import { pluginStatePath, readPluginState, writePluginState } from "./state.js";
 import { appendFile } from "node:fs/promises";
 
 function configuredValue(value, fallback = "") {
@@ -19,10 +21,9 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   const debug = debugEnabled();
   const recorder = createRecorder({ project, directory });
   let loggedInit = false;
-  let authChecked = false;
-  let authAvailable = false;
   let authWarningLogged = false;
   let distlangMissingLogged = false;
+  let commandHandledAt = 0;
 
   async function log(level, message, extra = undefined) {
     const line = JSON.stringify({
@@ -63,22 +64,99 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     loggedInit = true;
     await log(debug ? "debug" : "info", "Distlang OpenCode AI Debugger plugin initialized", {
       debug,
+      statePath: pluginStatePath(),
       distlang: distlangCommandInfo(),
     });
   }
 
-  async function ensureAuthStatus() {
-    if (authChecked) {
-      return authAvailable;
+  async function uploadEnabled() {
+    const state = await readPluginState();
+    return state.enabled !== false;
+  }
+
+  async function maybeLogCommandResult(level, message, extra = undefined) {
+    await log(level, message, extra);
+  }
+
+  async function handleDistlangCommand(invocation, source) {
+    const now = Date.now();
+    if (now - commandHandledAt < 250) {
+      return;
     }
-    authChecked = true;
+    commandHandledAt = now;
+    const action = configuredValue(invocation.args[0], "status").toLowerCase();
+    if (action === "start") {
+      const state = await writePluginState(true);
+      authWarningLogged = false;
+      let resolved = null;
+      let auth = null;
+      try {
+        resolved = await resolveDistlangBinary({ installIfMissing: true });
+      } catch (error) {
+        await maybeLogCommandResult("warn", "Distlang uploads enabled, but distlang install/resolve failed", { source, action, error: String(error) });
+        return;
+      }
+      try {
+        auth = await getAuthStatus();
+      } catch (error) {
+        await maybeLogCommandResult("warn", "Distlang uploads enabled, but auth check failed", { source, action, state, distlang: resolved, error: String(error) });
+        return;
+      }
+      await maybeLogCommandResult("info", "Distlang AI Debugger uploads enabled", {
+        source,
+        action,
+        state,
+        distlang: resolved,
+        auth,
+      });
+      return;
+    }
+
+    if (action === "stop") {
+      const state = await writePluginState(false);
+      await maybeLogCommandResult("info", "Distlang AI Debugger uploads disabled", { source, action, state });
+      return;
+    }
+
+    const state = await readPluginState();
+    let resolved = null;
+    let auth = null;
+    let sessions = null;
+    let resolutionError = null;
     try {
+      resolved = await resolveDistlangBinary({ installIfMissing: true });
+      auth = await getAuthStatus();
+      sessions = await fetchAIDebuggerSessions();
+    } catch (error) {
+      resolutionError = String(error);
+    }
+    await maybeLogCommandResult("info", "Distlang AI Debugger status", {
+      source,
+      action,
+      state,
+      distlang: resolved,
+      auth,
+      sessions,
+      error: resolutionError,
+      command_hint: "/distlang status | /distlang start | /distlang stop",
+    });
+  }
+
+  async function ensureAuthStatus() {
+    if (!(await uploadEnabled())) {
+      await debugLog("Distlang AI Debugger uploads are disabled", { state: await readPluginState() });
+      return false;
+    }
+    try {
+      const resolved = await resolveDistlangBinary({ installIfMissing: true });
       const payload = await getAuthStatus();
-      authAvailable = payload && payload.ok === true && payload.logged_in === true;
-      await debugLog("Distlang auth status resolved", { authAvailable, payload });
+      const authAvailable = payload && payload.ok === true && payload.logged_in === true;
+      await debugLog("Distlang auth status resolved", { authAvailable, payload, distlang: resolved });
       if (!authAvailable && !authWarningLogged) {
         authWarningLogged = true;
         await log("warn", "Distlang AI Debugger upload disabled: run `distlang helpers login` first", { auth: payload });
+      } else if (authAvailable) {
+        authWarningLogged = false;
       }
       return authAvailable;
     } catch (error) {
@@ -91,7 +169,6 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
         authWarningLogged = true;
         await log("warn", "Distlang AI Debugger auth check failed; upload disabled", { error: String(error) });
       }
-      authAvailable = false;
       return false;
     }
   }
@@ -175,6 +252,14 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
         return;
       }
 
+      if (event.type === "command.executed") {
+        const invocation = extractDistlangInvocation(event);
+        if (invocation) {
+          await handleDistlangCommand(invocation, "command.executed");
+        }
+        return;
+      }
+
 
       if (event.type === "session.created") {
 	      const observed = recorder.observeSessionCreated(event);
@@ -222,6 +307,15 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 	        await uploadSessionSnapshot(assistantMessage.sessionID, "success");
 	      }
 	    }
+    },
+
+    "tui.command.execute": async (input) => {
+      await logInit();
+      const invocation = extractDistlangInvocation(input);
+      if (!invocation) {
+        return;
+      }
+      await handleDistlangCommand(invocation, "tui.command.execute");
     },
 
     "tool.execute.before": async (input) => {
