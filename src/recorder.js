@@ -302,6 +302,23 @@ export function createRecorder({ project, directory }) {
     return payload;
   }
 
+  function snapshotSession(sessionID, result = "success", endedAtMs = Date.now()) {
+    const recorder = sessions.get(sessionID);
+    if (!recorder) {
+      return null;
+    }
+    recorder.status = result;
+    recorder.endedAtMs = endedAtMs;
+    for (const interaction of recorder.interactions) {
+      if (!interaction.endedAtMs || interaction.endedAtMs < interaction.startedAtMs) {
+        interaction.endedAtMs = endedAtMs;
+      }
+      interaction.status = inferResultStatus(interaction.steps.map((step) => step.status), result);
+      interaction.summary = configuredValue(interaction.summary, summarizePrompt(interaction.prompt, `Interaction ${interaction.index}`));
+    }
+    return buildSessionPayload(recorder);
+  }
+
   return {
     activeSessionID,
     observeSessionCreated,
@@ -311,6 +328,7 @@ export function createRecorder({ project, directory }) {
     observeToolBefore,
     observeToolAfter,
     finalizeSession,
+    snapshotSession,
   };
 }
 

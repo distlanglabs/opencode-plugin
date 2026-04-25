@@ -1,5 +1,6 @@
 import { createRecorder } from "./recorder.js";
 import { distlangCommandInfo, getAuthStatus, uploadAIDebuggerPayload } from "./distlang.js";
+import { appendFile } from "node:fs/promises";
 
 function configuredValue(value, fallback = "") {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
@@ -8,6 +9,10 @@ function configuredValue(value, fallback = "") {
 function debugEnabled() {
   const value = configuredValue(process.env.DISTLANG_OPENCODE_DEBUG, "").toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function debugLogFile() {
+  return configuredValue(process.env.DISTLANG_OPENCODE_LOG_FILE, "");
 }
 
 export const DistlangAIDebugger = async ({ project, directory, client }) => {
@@ -20,6 +25,17 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   let distlangMissingLogged = false;
 
   async function log(level, message, extra = undefined) {
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      service: "distlang-ai-debugger",
+      level,
+      message,
+      extra,
+    });
+    const outputPath = debugLogFile();
+    if (outputPath) {
+      await appendFile(outputPath, `${line}\n`).catch(() => {});
+    }
     if (!client || !client.app || typeof client.app.log !== "function") {
       return;
     }
@@ -81,7 +97,13 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   }
 
   async function finalizeSession(sessionID, result) {
-    const payload = recorder.finalizeSession(sessionID, result, Date.now());
+    let payload;
+    try {
+      payload = recorder.finalizeSession(sessionID, result, Date.now());
+    } catch (error) {
+      await log("error", "AI Debugger session finalization failed", { sessionID, result, error: String(error) });
+      return;
+    }
     if (!payload) {
       await debugLog("No payload produced during session finalization", { sessionID, result });
       return;
@@ -110,6 +132,42 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     }
   }
 
+  async function uploadSessionSnapshot(sessionID, result = "success") {
+    let payload;
+    try {
+      payload = recorder.snapshotSession(sessionID, result, Date.now());
+    } catch (error) {
+      await log("error", "AI Debugger session snapshot failed", { sessionID, result, error: String(error) });
+      return;
+    }
+    if (!payload) {
+      await debugLog("No payload produced during session snapshot", { sessionID, result });
+      return;
+    }
+    await debugLog("Prepared AI Debugger session snapshot", {
+      sessionID,
+      result,
+      interactions: Array.isArray(payload.interactions) ? payload.interactions.length : 0,
+      steps: Array.isArray(payload.interactions) ? payload.interactions.reduce((total, interaction) => total + (Array.isArray(interaction.steps) ? interaction.steps.length : 0), 0) : 0,
+      project: payload.project,
+    });
+    if (!(await ensureAuthStatus())) {
+      await debugLog("Skipping AI debugger snapshot upload because auth is unavailable", { sessionID });
+      return;
+    }
+    try {
+      const response = await uploadAIDebuggerPayload(payload);
+      await debugLog("AI Debugger snapshot upload response received", { sessionID, response });
+      if (!response.ok) {
+        await log("warn", "AI Debugger snapshot upload failed", { sessionID, response });
+        return;
+      }
+      await debugLog("AI Debugger session snapshot uploaded", { sessionID, response });
+    } catch (error) {
+      await log("warn", "AI Debugger snapshot upload failed", { sessionID, error: String(error) });
+    }
+  }
+
   return {
     event: async ({ event }) => {
       await logInit();
@@ -117,48 +175,53 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
         return;
       }
 
+
       if (event.type === "session.created") {
-        const observed = recorder.observeSessionCreated(event);
-        if (observed) {
-          await debugLog("session.created observed", observed);
-        }
+	      const observed = recorder.observeSessionCreated(event);
+	      if (observed) {
+	        await debugLog("session.created observed", observed);
+	      }
         return;
       }
+
 
       if (event.type === "session.idle" || event.type === "session.error") {
-        const sessionID = configuredValue(event.sessionID, recorder.activeSessionID());
-        if (!sessionID) {
-          await debugLog("Session terminal event missing sessionID", { type: event.type, eventKeys: Object.keys(event) });
-          return;
-        }
-        const result = event.type === "session.error" ? "error" : "success";
-        await debugLog(`${event.type} observed`, { sessionID, result });
-        await finalizeSession(sessionID, result);
-        return;
-      }
+	      const sessionID = configuredValue(event.sessionID, recorder.activeSessionID());
+	      if (!sessionID) {
+	        await debugLog("Session terminal event missing sessionID", { type: event.type, eventKeys: Object.keys(event) });
+	        return;
+	      }
+	      const result = event.type === "session.error" ? "error" : "success";
+	      await debugLog(`${event.type} observed`, { sessionID, result });
+	      await finalizeSession(sessionID, result);
+	      return;
+	    }
 
-      if (event.type === "file.edited") {
-        const observed = recorder.observeFileEdited(event);
-        if (observed) {
-          await debugLog("file.edited observed", observed);
-        }
-        return;
-      }
+	    if (event.type === "file.edited") {
+	      const observed = recorder.observeFileEdited(event);
+	      if (observed) {
+	        await debugLog("file.edited observed", observed);
+	      }
+	      return;
+	    }
 
-      if (event.type !== "message.updated") {
-        return;
-      }
+	    if (event.type !== "message.updated") {
+	      return;
+	    }
 
-      const userMessage = recorder.observeUserMessage(event);
-      if (userMessage) {
-        await debugLog("user message observed", userMessage);
-        return;
-      }
+	    const userMessage = recorder.observeUserMessage(event);
+	    if (userMessage) {
+	      await debugLog("user message observed", userMessage);
+	      return;
+	    }
 
-      const assistantMessage = recorder.observeAssistantMessage(event);
-      if (assistantMessage) {
-        await debugLog("assistant message update observed", assistantMessage);
-      }
+	    const assistantMessage = recorder.observeAssistantMessage(event);
+	    if (assistantMessage) {
+	      await debugLog("assistant message update observed", assistantMessage);
+	      if (assistantMessage.finalized) {
+	        await uploadSessionSnapshot(assistantMessage.sessionID, "success");
+	      }
+	    }
     },
 
     "tool.execute.before": async (input) => {
