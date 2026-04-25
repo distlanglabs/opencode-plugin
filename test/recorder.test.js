@@ -78,3 +78,27 @@ test("uses explicit context token field when OpenCode provides it", () => {
   assert.equal(payload.session.summary, "OpenCode generated title");
   assert.equal(payload.session.context_size_tokens_max, 999);
 });
+
+test("uses the session title when an interaction prompt is only the generic fallback", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({
+    type: "session.created",
+    sessionID: "session-3",
+    info: { id: "session-3", title: "Explain interaction naming" },
+  });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    info: {
+      id: "assistant-3",
+      sessionID: "session-3",
+      role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.5",
+      content: "Explained the timeline label",
+    },
+  });
+
+  const payload = recorder.finalizeSession("session-3", "success", Date.now());
+  assert.equal(payload.interactions[0].prompt, "Explain interaction naming");
+  assert.equal(payload.interactions[0].summary, "Explain interaction naming");
+});

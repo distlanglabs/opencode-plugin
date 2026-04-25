@@ -357,7 +357,8 @@ export function createRecorder({ project, directory }) {
 }
 
 function buildSessionPayload(recorder) {
-  const interactions = recorder.interactions.map(buildInteractionPayload);
+  const sessionTitle = sanitizeDebuggerText(recorder.title);
+  const interactions = recorder.interactions.map((interaction) => buildInteractionPayload(interaction, sessionTitle));
   const allSteps = interactions.flatMap((interaction) => interaction.steps);
   const llmSteps = allSteps.filter((step) => step.kind === "llm_call");
   const contextValues = llmSteps.map((step) => step.context_size_tokens).filter((value) => value > 0);
@@ -389,10 +390,14 @@ function buildSessionPayload(recorder) {
   };
 }
 
-function buildInteractionPayload(interaction) {
+function buildInteractionPayload(interaction, sessionTitle = "") {
   const llmSteps = interaction.steps.filter((step) => step.kind === "llm_call");
   const contextValues = llmSteps.map((step) => step.context_size_tokens).filter((value) => value > 0);
-  const prompt = configuredValue(interaction.prompt, `Interaction ${interaction.index}`);
+  const promptFallback = configuredValue(sessionTitle, `Interaction ${interaction.index}`);
+  const rawPrompt = sanitizeDebuggerText(interaction.prompt);
+  const rawSummary = sanitizeDebuggerText(interaction.summary);
+  const prompt = isGenericInteractionLabel(rawPrompt) ? promptFallback : configuredValue(rawPrompt, promptFallback);
+  const summaryFallback = summarizePrompt(prompt, promptFallback);
   return {
     id: interaction.id,
     index: interaction.index,
@@ -402,7 +407,7 @@ function buildInteractionPayload(interaction) {
     ended_at: interaction.endedAtMs > 0 ? new Date(interaction.endedAtMs).toISOString() : new Date(Date.now()).toISOString(),
     duration_ms: Math.max(0, (interaction.endedAtMs || Date.now()) - interaction.startedAtMs),
     status: inferResultStatus(interaction.steps.map((step) => step.status), interaction.status),
-    summary: configuredValue(interaction.summary, summarizePrompt(prompt, `Interaction ${interaction.index}`)),
+    summary: isGenericInteractionLabel(rawSummary) ? summaryFallback : configuredValue(rawSummary, summaryFallback),
     llm_call_count: llmSteps.length,
     cost_usd: interaction.steps.reduce((total, step) => total + finiteNumber(step.cost_usd), 0),
     input_tokens: interaction.steps.reduce((total, step) => total + finiteNumber(step.input_tokens), 0),
@@ -415,6 +420,11 @@ function buildInteractionPayload(interaction) {
     step_count: interaction.steps.length,
     steps: interaction.steps,
   };
+}
+
+function isGenericInteractionLabel(value) {
+  const label = String(value || "").trim();
+  return /^OpenCode interaction \d+$/i.test(label) || /^Interaction \d+$/i.test(label);
 }
 
 function configuredValue(value, fallback = "") {
