@@ -514,15 +514,15 @@ function tokensFromMessage(info) {
 }
 
 function extractMessageText(info) {
-  const direct = configuredValue(info && (info.text ?? info.prompt ?? info.message ?? info.body), "");
+  const direct = sanitizeDebuggerText(configuredValue(info && (info.text ?? info.prompt ?? info.message ?? info.body), ""));
   if (direct !== "") {
     return direct;
   }
-  if (typeof info?.content === "string" && info.content.trim() !== "") {
-    return info.content.trim();
+  if (typeof info?.content === "string") {
+    return sanitizeDebuggerText(info.content);
   }
   if (Array.isArray(info?.content)) {
-    return info.content
+    return sanitizeDebuggerText(info.content
       .map((part) => {
         if (typeof part === "string") {
           return part;
@@ -534,9 +534,22 @@ function extractMessageText(info) {
       })
       .filter(Boolean)
       .join("\n")
-      .trim();
+      .trim());
   }
   return "";
+}
+
+function sanitizeDebuggerText(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
+    .replace(/<system>[\s\S]*?<\/system>/gi, "")
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("# Plan Mode - System Reminder"))
+    .join("\n")
+    .trim();
 }
 
 function summarizePrompt(prompt, fallback) {
