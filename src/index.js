@@ -193,6 +193,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   async function finalizeSession(sessionID, result) {
     let payload;
     try {
+      await refreshSessionMetadata(sessionID);
       payload = recorder.finalizeSession(sessionID, result, Date.now());
     } catch (error) {
       await log("error", "AI Debugger session finalization failed", { sessionID, result, error: String(error) });
@@ -229,6 +230,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   async function uploadSessionSnapshot(sessionID, result = "success") {
     let payload;
     try {
+      await refreshSessionMetadata(sessionID);
       payload = recorder.snapshotSession(sessionID, result, Date.now());
     } catch (error) {
       await log("error", "AI Debugger session snapshot failed", { sessionID, result, error: String(error) });
@@ -262,6 +264,39 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     }
   }
 
+  async function refreshSessionMetadata(sessionID) {
+    if (!sessionID || !client?.session || typeof client.session.get !== "function") {
+      return;
+    }
+    try {
+      const response = await client.session.get({ path: { id: sessionID } });
+      const session = response?.data ?? response;
+      const title = session && typeof session === "object" ? configuredValue(session.title ?? session.name ?? session.summary, "") : "";
+      if (title) {
+        recorder.setSessionTitle(sessionID, title);
+        await debugLog("OpenCode session metadata refreshed", { sessionID, titleLength: title.length });
+      }
+    } catch (error) {
+      await debugLog("OpenCode session metadata refresh failed", { sessionID, error: String(error) });
+    }
+  }
+
+  function messageShape(event) {
+    const info = event && typeof event === "object" ? event.info ?? event.properties?.info : null;
+    if (!info || typeof info !== "object") {
+      return { eventKeys: Object.keys(event || {}) };
+    }
+    return {
+      eventKeys: Object.keys(event || {}),
+      infoKeys: Object.keys(info),
+      tokenKeys: info.tokens && typeof info.tokens === "object" ? Object.keys(info.tokens) : [],
+      usageKeys: info.usage && typeof info.usage === "object" ? Object.keys(info.usage) : [],
+      metadataKeys: info.metadata && typeof info.metadata === "object" ? Object.keys(info.metadata) : [],
+      responseKeys: info.response && typeof info.response === "object" ? Object.keys(info.response) : [],
+      hasTitle: Boolean(info.title || info.name || info.summary),
+    };
+  }
+
   return {
     event: async ({ event }) => {
       await logInit();
@@ -282,6 +317,14 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 	      const observed = recorder.observeSessionCreated(event);
 	      if (observed) {
 	        await debugLog("session.created observed", observed);
+	      }
+        return;
+      }
+
+      if (event.type === "session.updated") {
+	      const observed = recorder.observeSessionUpdated(event);
+	      if (observed) {
+	        await debugLog("session.updated observed", observed);
 	      }
         return;
       }
@@ -319,7 +362,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 
 	    const assistantMessage = recorder.observeAssistantMessage(event);
 	    if (assistantMessage) {
-	      await debugLog("assistant message update observed", assistantMessage);
+	      await debugLog("assistant message update observed", { ...assistantMessage, shape: messageShape(event) });
 	      if (assistantMessage.finalized) {
 	        await uploadSessionSnapshot(assistantMessage.sessionID, "success");
 	      }

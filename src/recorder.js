@@ -55,6 +55,7 @@ export function createRecorder({ project, directory }) {
       endedAtMs: 0,
       status: "success",
       summary: "",
+      title: "",
       interactions: [],
       currentInteractionID: "",
       interactionCounter: 0,
@@ -137,8 +138,28 @@ export function createRecorder({ project, directory }) {
     if (!sessionID) {
       return null;
     }
-    ensureSession(sessionID, parseTimestamp(sessionInfo.time, Date.now()));
+    const recorder = ensureSession(sessionID, parseTimestamp(sessionInfo.time, Date.now()));
+    updateSessionTitle(recorder, sessionInfo);
     return { sessionID };
+  }
+
+  function observeSessionUpdated(event) {
+    const sessionInfo = event.info && typeof event.info === "object" ? event.info : event.properties && typeof event.properties === "object" ? event.properties : {};
+    const sessionID = configuredValue(event.sessionID, configuredValue(sessionInfo.id, ""));
+    if (!sessionID) {
+      return null;
+    }
+    const recorder = ensureSession(sessionID, parseTimestamp(sessionInfo.time, Date.now()));
+    const title = updateSessionTitle(recorder, sessionInfo);
+    return { sessionID, title };
+  }
+
+  function setSessionTitle(sessionID, title) {
+    if (!sessionID) {
+      return null;
+    }
+    const recorder = ensureSession(sessionID, Date.now());
+    return updateSessionTitle(recorder, { title });
   }
 
   function observeFileEdited(event) {
@@ -223,6 +244,7 @@ export function createRecorder({ project, directory }) {
         output_tokens: tokens.output,
         reasoning_tokens: tokens.reasoning,
         cached_tokens: tokens.cached,
+        context_size_tokens: tokens.context,
         cost_usd: finiteNumber(info && info.cost),
         first_token_at: existing.firstTokenAt != null ? new Date(existing.firstTokenAt).toISOString() : null,
         first_token_latency_ms: existing.firstTokenAt != null ? Math.max(0, existing.firstTokenAt - existing.firstSeenAt) : 0,
@@ -322,6 +344,8 @@ export function createRecorder({ project, directory }) {
   return {
     activeSessionID,
     observeSessionCreated,
+    observeSessionUpdated,
+    setSessionTitle,
     observeFileEdited,
     observeUserMessage,
     observeAssistantMessage,
@@ -347,7 +371,7 @@ function buildSessionPayload(recorder) {
       ended_at: new Date(recorder.endedAtMs || Date.now()).toISOString(),
       duration_ms: Math.max(0, (recorder.endedAtMs || Date.now()) - recorder.startedAtMs),
       status: inferResultStatus(interactions.map((interaction) => interaction.status), recorder.status),
-      summary: configuredValue(recorder.summary, interactions[0]?.summary || `OpenCode session ${recorder.id}`),
+      summary: configuredValue(recorder.title, configuredValue(recorder.summary, interactions[0]?.summary || `OpenCode session ${recorder.id}`)),
       total_cost_usd: allSteps.reduce((total, step) => total + finiteNumber(step.cost_usd), 0),
       input_tokens: allSteps.reduce((total, step) => total + finiteNumber(step.input_tokens), 0),
       output_tokens: allSteps.reduce((total, step) => total + finiteNumber(step.output_tokens), 0),
@@ -501,16 +525,62 @@ function assistantFinalState(info) {
 }
 
 function tokensFromMessage(info) {
-  const tokens = info && typeof info === "object" ? info.tokens : null;
-  const cacheValue = tokens && typeof tokens === "object"
-    ? (tokens.cache ?? tokens.cached ?? tokens.cacheReadInputTokens ?? tokens.cachedInput)
-    : 0;
+  const sources = tokenSources(info);
+  const cacheValue = firstNumber(sources, ["cache", "cached", "cached_tokens", "cachedTokens", "cacheReadInputTokens", "cachedInput", "cachedInputTokens"]);
+  const input = firstNumber(sources, ["input", "input_tokens", "inputTokens", "prompt", "prompt_tokens", "promptTokens"]);
+  const output = firstNumber(sources, ["output", "output_tokens", "outputTokens", "completion", "completion_tokens", "completionTokens"]);
+  const reasoning = firstNumber(sources, ["reasoning", "reasoning_tokens", "reasoningTokens"]);
+  const explicitContext = firstNumber(sources, ["context", "context_tokens", "contextTokens", "context_size", "contextSize", "context_size_tokens", "contextSizeTokens"]);
   return {
-    input: finiteNumber(tokens && tokens.input),
-    output: finiteNumber(tokens && tokens.output),
-    reasoning: finiteNumber(tokens && tokens.reasoning),
-    cached: finiteNumber(cacheValue),
+    input,
+    output,
+    reasoning,
+    cached: cacheValue,
+    context: explicitContext > 0 ? explicitContext : input + cacheValue + reasoning,
   };
+}
+
+function tokenSources(info) {
+  if (!info || typeof info !== "object") {
+    return [];
+  }
+  return [
+    info.tokens,
+    info.usage,
+    info.usageTokens,
+    info.metadata && info.metadata.tokens,
+    info.metadata && info.metadata.usage,
+    info.response && info.response.tokens,
+    info.response && info.response.usage,
+    info.model && info.model.tokens,
+    info.model && info.model.usage,
+    info,
+  ].filter((source) => source && typeof source === "object");
+}
+
+function firstNumber(sources, keys) {
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = source[key];
+      if (typeof value === "undefined" || value === null) {
+        continue;
+      }
+      const parsed = finiteNumber(value);
+      if (parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return 0;
+}
+
+function updateSessionTitle(recorder, info) {
+  const title = sanitizeDebuggerText(configuredValue(info && (info.title ?? info.name ?? info.summary), ""));
+  if (title) {
+    recorder.title = title;
+    recorder.summary = title;
+  }
+  return recorder.title;
 }
 
 function extractMessageText(info) {

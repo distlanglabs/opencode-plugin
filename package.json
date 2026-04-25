@@ -1,6 +1,6 @@
 {
   "name": "@distlang/opencode-plugin",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "OpenCode plugin for Distlang AI Debugger",
   "type": "module",
   "main": "./src/index.js",
@@ -14,7 +14,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --check src/index.js && node --check src/recorder.js && node --check src/distlang.js && node --check src/state.js && node --check src/command.js",
+    "test": "node --check src/index.js && node --check src/recorder.js && node --check src/distlang.js && node --check src/state.js && node --check src/command.js && node --test test/*.test.js",
     "check": "npm test",
     "pack:check": "npm pack --dry-run",
     "release": "npm test && npm run pack:check",
