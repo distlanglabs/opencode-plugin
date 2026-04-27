@@ -1,4 +1,4 @@
-import { createRecorder } from "./recorder.js";
+import { createRecorder, extractSessionTitle } from "./recorder.js";
 import { extractDistlangInvocation } from "./command.js";
 import { distlangCommandInfo, fetchAIDebuggerSessions, getAuthStatus, loginWithDistlang, resolveDistlangBinary, uploadAIDebuggerPayload } from "./distlang.js";
 import { pluginStatePath, readPluginState, writePluginState } from "./state.js";
@@ -193,7 +193,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   async function finalizeSession(sessionID, result) {
     let payload;
     try {
-      await refreshSessionMetadata(sessionID);
+      await refreshSessionMetadata(sessionID, { retry: true });
       payload = recorder.finalizeSession(sessionID, result, Date.now());
     } catch (error) {
       await log("error", "AI Debugger session finalization failed", { sessionID, result, error: String(error) });
@@ -230,7 +230,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   async function uploadSessionSnapshot(sessionID, result = "success") {
     let payload;
     try {
-      await refreshSessionMetadata(sessionID);
+      await refreshSessionMetadata(sessionID, { retry: true });
       payload = recorder.snapshotSession(sessionID, result, Date.now());
     } catch (error) {
       await log("error", "AI Debugger session snapshot failed", { sessionID, result, error: String(error) });
@@ -264,21 +264,33 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     }
   }
 
-  async function refreshSessionMetadata(sessionID) {
+  async function refreshSessionMetadata(sessionID, options = {}) {
     if (!sessionID || !client?.session || typeof client.session.get !== "function") {
       return;
     }
-    try {
-      const response = await client.session.get({ path: { id: sessionID } });
-      const session = response?.data ?? response;
-      const title = session && typeof session === "object" ? configuredValue(session.title ?? session.name ?? session.summary, "") : "";
-      if (title) {
-        recorder.setSessionTitle(sessionID, title);
-        await debugLog("OpenCode session metadata refreshed", { sessionID, titleLength: title.length });
+    const attempts = options.retry ? 3 : 1;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await client.session.get({ path: { id: sessionID } });
+        const session = response?.data ?? response;
+        const title = extractSessionTitle(session);
+        await debugLog("OpenCode session metadata inspected", { sessionID, attempt, sessionKeys: session && typeof session === "object" ? Object.keys(session) : [] });
+        if (title) {
+          recorder.setSessionTitle(sessionID, title);
+          await debugLog("OpenCode session metadata refreshed", { sessionID, attempt, titleLength: title.length });
+          return;
+        }
+      } catch (error) {
+        await debugLog("OpenCode session metadata refresh failed", { sessionID, attempt, error: String(error) });
       }
-    } catch (error) {
-      await debugLog("OpenCode session metadata refresh failed", { sessionID, error: String(error) });
+      if (attempt < attempts) {
+        await sleep(500);
+      }
     }
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function messageShape(event) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRecorder } from "../src/recorder.js";
+import { createRecorder, extractSessionTitle } from "../src/recorder.js";
 
 test("captures OpenCode title, token usage, context, and sanitized text", () => {
   const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
@@ -101,4 +101,54 @@ test("uses the session title when an interaction prompt is only the generic fall
   const payload = recorder.finalizeSession("session-3", "success", Date.now());
   assert.equal(payload.interactions[0].prompt, "Explain interaction naming");
   assert.equal(payload.interactions[0].summary, "Explain interaction naming");
+});
+
+test("extracts nested OpenCode session titles", () => {
+  assert.equal(extractSessionTitle({ data: { session: { title: "High-level overview of distlang and dash" } } }), "High-level overview of distlang and dash");
+  assert.equal(extractSessionTitle({ properties: { metadata: { name: "Review dashboard telemetry" } } }), "Review dashboard telemetry");
+  assert.equal(extractSessionTitle({ title: "OpenCode interaction 1", data: { summary: "Useful session title" } }), "Useful session title");
+});
+
+test("uses nested event title as session summary", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({
+    type: "session.created",
+    sessionID: "session-4",
+    info: { id: "session-4" },
+    properties: { session: { title: "High-level overview of distlang and dash" } },
+  });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    info: {
+      id: "assistant-4",
+      sessionID: "session-4",
+      role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.5",
+      content: "Overview complete",
+    },
+  });
+
+  const payload = recorder.finalizeSession("session-4", "success", Date.now());
+  assert.equal(payload.session.summary, "High-level overview of distlang and dash");
+  assert.equal(payload.interactions[0].prompt, "High-level overview of distlang and dash");
+});
+
+test("does not use generic interaction label as session summary", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-5", info: { id: "session-5" } });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    info: {
+      id: "assistant-5",
+      sessionID: "session-5",
+      role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.5",
+      content: "Summarized state",
+    },
+  });
+
+  const payload = recorder.finalizeSession("session-5", "success", Date.now());
+  assert.equal(payload.session.summary, "OpenCode session session-5");
 });

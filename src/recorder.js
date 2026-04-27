@@ -93,7 +93,7 @@ export function createRecorder({ project, directory }) {
   function ensureInteraction(recorder, timestampMs, prompt = "") {
     const current = findInteraction(recorder, recorder.currentInteractionID);
     if (current) {
-      if (prompt && (!current.prompt || current.prompt.startsWith("OpenCode interaction "))) {
+      if (prompt && (!current.prompt || isGenericInteractionLabel(current.prompt))) {
         current.prompt = prompt;
       }
       return current;
@@ -139,7 +139,7 @@ export function createRecorder({ project, directory }) {
       return null;
     }
     const recorder = ensureSession(sessionID, parseTimestamp(sessionInfo.time, Date.now()));
-    updateSessionTitle(recorder, sessionInfo);
+    updateSessionTitle(recorder, event);
     return { sessionID };
   }
 
@@ -150,7 +150,7 @@ export function createRecorder({ project, directory }) {
       return null;
     }
     const recorder = ensureSession(sessionID, parseTimestamp(sessionInfo.time, Date.now()));
-    const title = updateSessionTitle(recorder, sessionInfo);
+    const title = updateSessionTitle(recorder, event);
     return { sessionID, title };
   }
 
@@ -372,7 +372,7 @@ function buildSessionPayload(recorder) {
       ended_at: new Date(recorder.endedAtMs || Date.now()).toISOString(),
       duration_ms: Math.max(0, (recorder.endedAtMs || Date.now()) - recorder.startedAtMs),
       status: inferResultStatus(interactions.map((interaction) => interaction.status), recorder.status),
-      summary: configuredValue(recorder.title, configuredValue(recorder.summary, interactions[0]?.summary || `OpenCode session ${recorder.id}`)),
+      summary: bestSessionSummary(recorder, interactions),
       total_cost_usd: allSteps.reduce((total, step) => total + finiteNumber(step.cost_usd), 0),
       input_tokens: allSteps.reduce((total, step) => total + finiteNumber(step.input_tokens), 0),
       output_tokens: allSteps.reduce((total, step) => total + finiteNumber(step.output_tokens), 0),
@@ -585,12 +585,47 @@ function firstNumber(sources, keys) {
 }
 
 function updateSessionTitle(recorder, info) {
-  const title = sanitizeDebuggerText(configuredValue(info && (info.title ?? info.name ?? info.summary), ""));
+  const title = extractSessionTitle(info);
   if (title) {
     recorder.title = title;
     recorder.summary = title;
   }
   return recorder.title;
+}
+
+export function extractSessionTitle(info) {
+  const title = findSessionTitle(info, new Set());
+  return isGenericInteractionLabel(title) ? "" : title;
+}
+
+function findSessionTitle(value, seen) {
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return "";
+  }
+  seen.add(value);
+  for (const key of ["title", "name", "summary"]) {
+    const candidate = sanitizeDebuggerText(configuredValue(value[key], ""));
+    if (candidate && !isGenericInteractionLabel(candidate)) {
+      return candidate;
+    }
+  }
+  for (const key of ["session", "metadata", "info", "properties", "data"]) {
+    const candidate = findSessionTitle(value[key], seen);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function bestSessionSummary(recorder, interactions) {
+  for (const candidate of [recorder.title, recorder.summary, interactions[0]?.prompt, interactions[0]?.summary]) {
+    const cleaned = sanitizeDebuggerText(configuredValue(candidate, ""));
+    if (cleaned && !isGenericInteractionLabel(cleaned)) {
+      return cleaned;
+    }
+  }
+  return `OpenCode session ${recorder.id}`;
 }
 
 function extractMessageText(info) {
