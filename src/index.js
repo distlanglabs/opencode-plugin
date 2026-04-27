@@ -19,7 +19,7 @@ function debugLogFile() {
 
 export const DistlangAIDebugger = async ({ project, directory, client }) => {
   const debug = debugEnabled();
-  const recorder = createRecorder({ project, directory });
+  const recorder = createRecorder({ project, directory, initialPrompt: extractOpenCodeRunPrompt(process.argv) });
   let loggedInit = false;
   let authWarningLogged = false;
   let distlangMissingLogged = false;
@@ -291,6 +291,39 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function extractOpenCodeRunPrompt(argv) {
+    const args = Array.isArray(argv) ? argv : [];
+    const runIndex = args.findIndex((arg) => arg === "run");
+    if (runIndex < 0) {
+      return "";
+    }
+    const promptParts = [];
+    for (let index = runIndex + 1; index < args.length; index += 1) {
+      const arg = configuredValue(args[index], "");
+      if (!arg) {
+        continue;
+      }
+      if (arg === "--") {
+        continue;
+      }
+      if (arg === "--dangerously-skip-permissions") {
+        continue;
+      }
+      if (arg === "--model" || arg === "-m") {
+        index += 1;
+        continue;
+      }
+      if (arg.startsWith("--model=")) {
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        continue;
+      }
+      promptParts.push(arg);
+    }
+    return promptParts.join(" ").trim();
   }
 
   function messageShape(event) {

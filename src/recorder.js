@@ -32,8 +32,9 @@ const extensionLanguages = {
   ".yml": "yaml",
 };
 
-export function createRecorder({ project, directory }) {
+export function createRecorder({ project, directory, initialPrompt = "" }) {
   const projectName = deriveProjectName(project, directory);
+  const configuredInitialPrompt = sanitizeDebuggerText(initialPrompt);
   const sessions = new Map();
 
   function activeSessionID() {
@@ -56,6 +57,7 @@ export function createRecorder({ project, directory }) {
       status: "success",
       summary: "",
       title: "",
+      initialPrompt: configuredInitialPrompt,
       interactions: [],
       currentInteractionID: "",
       interactionCounter: 0,
@@ -98,7 +100,7 @@ export function createRecorder({ project, directory }) {
       }
       return current;
     }
-    return createInteraction(recorder, prompt, timestampMs);
+    return createInteraction(recorder, configuredValue(prompt, recorder.initialPrompt), timestampMs);
   }
 
   function addStep(recorder, interaction, step) {

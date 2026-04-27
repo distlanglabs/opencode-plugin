@@ -152,3 +152,32 @@ test("does not use generic interaction label as session summary", () => {
   const payload = recorder.finalizeSession("session-5", "success", Date.now());
   assert.equal(payload.session.summary, "OpenCode session session-5");
 });
+
+test("uses sanitized opencode run prompt for assistant-only interactions", () => {
+  const recorder = createRecorder({
+    project: { name: "fixture" },
+    directory: "/tmp/fixture",
+    initialPrompt: "Create a high-level overview <system-reminder>SECRET</system-reminder>",
+  });
+  recorder.observeSessionCreated({
+    type: "session.created",
+    sessionID: "session-6",
+    info: { id: "session-6", title: "Generated OpenCode title" },
+  });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    info: {
+      id: "assistant-6",
+      sessionID: "session-6",
+      role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.5",
+      content: "Done",
+    },
+  });
+
+  const payload = recorder.finalizeSession("session-6", "success", Date.now());
+  assert.equal(payload.session.summary, "Generated OpenCode title");
+  assert.equal(payload.interactions[0].prompt, "Create a high-level overview");
+  assert.equal(payload.interactions[0].summary, "Create a high-level overview");
+});
