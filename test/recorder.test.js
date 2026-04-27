@@ -181,3 +181,84 @@ test("uses sanitized opencode run prompt for assistant-only interactions", () =>
   assert.equal(payload.interactions[0].prompt, "Create a high-level overview");
   assert.equal(payload.interactions[0].summary, "Create a high-level overview");
 });
+
+test("captures user prompt from OpenCode text part updates", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-7", info: { id: "session-7", title: "Generated overview title" } });
+  recorder.observeUserMessage({
+    type: "message.updated",
+    properties: {
+      info: {
+        id: "user-7",
+        sessionID: "session-7",
+        role: "user",
+        time: { created: Date.parse("2026-04-25T00:00:01.000Z") },
+      },
+    },
+  });
+  recorder.observeMessagePartUpdated({
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: "part-user-7",
+        sessionID: "session-7",
+        messageID: "user-7",
+        type: "text",
+        text: "Explain this repo <system-reminder>SECRET</system-reminder>",
+        time: { start: Date.parse("2026-04-25T00:00:01.500Z") },
+      },
+    },
+  });
+  recorder.observeMessagePartUpdated({
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: "part-assistant-7",
+        sessionID: "session-7",
+        messageID: "assistant-7",
+        type: "text",
+        text: "This repository contains a dashboard and services.",
+      },
+    },
+  });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    properties: {
+      info: {
+        id: "assistant-7",
+        sessionID: "session-7",
+        role: "assistant",
+        providerID: "openai",
+        modelID: "gpt-5.5",
+        status: "completed",
+        tokens: { input: 100, output: 20 },
+      },
+    },
+  });
+
+  const payload = recorder.finalizeSession("session-7", "success", Date.now());
+  assert.equal(payload.session.summary, "Generated overview title");
+  assert.equal(payload.interactions.length, 1);
+  assert.equal(payload.interactions[0].prompt, "Explain this repo");
+  assert.equal(payload.interactions[0].summary, "Explain this repo");
+  assert.equal(payload.interactions[0].steps[0].title, "This repository contains a dashboard and services.");
+});
+
+test("updates user text part without duplicating interactions", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-8", info: { id: "session-8" } });
+  recorder.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-8", sessionID: "session-8", role: "user" } } });
+  recorder.observeMessagePartUpdated({
+    type: "message.part.updated",
+    properties: { part: { id: "part-user-8", sessionID: "session-8", messageID: "user-8", type: "text", text: "First draft" } },
+  });
+  recorder.observeMessagePartUpdated({
+    type: "message.part.updated",
+    properties: { part: { id: "part-user-8", sessionID: "session-8", messageID: "user-8", type: "text", text: "Final prompt" } },
+  });
+  recorder.observeAssistantMessage({ type: "message.updated", properties: { info: { id: "assistant-8", sessionID: "session-8", role: "assistant", done: true, text: "Done" } } });
+
+  const payload = recorder.finalizeSession("session-8", "success", Date.now());
+  assert.equal(payload.interactions.length, 1);
+  assert.equal(payload.interactions[0].prompt, "Final prompt");
+});

@@ -18,7 +18,7 @@
     "check": "npm test",
     "pack:check": "npm pack --dry-run",
     "release": "npm test && npm run pack:check",
-    "publish": "npm publish --access public"
+    "publish:public": "npm publish --access public"
   },
   "keywords": [
     "distlang",

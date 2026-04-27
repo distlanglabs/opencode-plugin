@@ -395,6 +395,14 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 	      return;
 	    }
 
+	    if (event.type === "message.part.updated") {
+	      const observed = recorder.observeMessagePartUpdated(event);
+	      if (observed) {
+	        await debugLog("message.part.updated observed", observed);
+	      }
+	      return;
+	    }
+
 	    if (event.type !== "message.updated") {
 	      return;
 	    }

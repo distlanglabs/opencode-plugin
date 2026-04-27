@@ -63,6 +63,9 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       interactionCounter: 0,
       stepCounter: 0,
       assistantStates: new Map(),
+      messageRoles: new Map(),
+      messageTextParts: new Map(),
+      messageInteractions: new Map(),
       toolStarts: new Map(),
       seenUserMessages: new Set(),
     };
@@ -101,6 +104,33 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       return current;
     }
     return createInteraction(recorder, configuredValue(prompt, recorder.initialPrompt), timestampMs);
+  }
+
+  function observeUserPrompt(recorder, messageID, prompt, timestampMs) {
+    const cleanPrompt = sanitizeDebuggerText(prompt);
+    const existingID = recorder.messageInteractions.get(messageID);
+    const existing = existingID ? findInteraction(recorder, existingID) : null;
+    if (existing) {
+      existing.prompt = cleanPrompt;
+      existing.summary = summarizePrompt(cleanPrompt, existing.summary || `Interaction ${existing.index}`);
+      return existing;
+    }
+    const current = findInteraction(recorder, recorder.currentInteractionID);
+    const currentHasMessage = Array.from(recorder.messageInteractions.values()).includes(current?.id);
+    if (current && isGenericInteractionLabel(current.prompt) && !currentHasMessage) {
+      current.prompt = cleanPrompt;
+      current.summary = summarizePrompt(cleanPrompt, `Interaction ${current.index}`);
+      recorder.messageInteractions.set(messageID, current.id);
+      recorder.seenUserMessages.add(messageID);
+      return current;
+    }
+    if (recorder.seenUserMessages.has(messageID)) {
+      return current || createInteraction(recorder, cleanPrompt, timestampMs);
+    }
+    recorder.seenUserMessages.add(messageID);
+    const interaction = createInteraction(recorder, cleanPrompt, timestampMs);
+    recorder.messageInteractions.set(messageID, interaction.id);
+    return interaction;
   }
 
   function addStep(recorder, interaction, step) {
@@ -192,13 +222,35 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     }
     const recorder = ensureSession(sessionID, Date.now());
     const id = messageID(info) || `${sessionID}:user:${Date.now()}`;
-    const prompt = extractMessageText(info);
-    if (!prompt || recorder.seenUserMessages.has(id)) {
+    recorder.messageRoles.set(id, "user");
+    const prompt = extractMessageText(info) || storedMessageText(recorder, id);
+    if (!prompt) {
+      return { sessionID, messageID: id, prompt: "" };
+    }
+    const interaction = observeUserPrompt(recorder, id, prompt, parseMessageTime(info, Date.now()));
+    return { sessionID, messageID: id, prompt: interaction.prompt };
+  }
+
+  function observeMessagePartUpdated(event) {
+    const part = extractMessagePart(event);
+    if (!part || part.type !== "text") {
       return null;
     }
-    recorder.seenUserMessages.add(id);
-    createInteraction(recorder, prompt, parseTimestamp(info && info.time, Date.now()));
-    return { sessionID, messageID: id, prompt };
+    const sessionID = configuredValue(part.sessionID, activeSessionID());
+    const messageID = configuredValue(part.messageID, "");
+    const partID = configuredValue(part.id, "");
+    const text = sanitizeDebuggerText(configuredValue(part.text, configuredValue(event?.properties?.delta, "")));
+    if (!sessionID || !messageID || !partID || !text) {
+      return null;
+    }
+    const recorder = ensureSession(sessionID, Date.now());
+    storeMessageTextPart(recorder, messageID, partID, text);
+    const role = recorder.messageRoles.get(messageID);
+    if (role !== "user") {
+      return { sessionID, messageID, role: configuredValue(role, "unknown"), text };
+    }
+    const interaction = observeUserPrompt(recorder, messageID, storedMessageText(recorder, messageID), parsePartTime(part, Date.now()));
+    return { sessionID, messageID, role, text: interaction.prompt };
   }
 
   function observeAssistantMessage(event) {
@@ -212,6 +264,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       return null;
     }
     const recorder = ensureSession(sessionID, Date.now());
+    recorder.messageRoles.set(id, "assistant");
     const interaction = ensureInteraction(recorder, Date.now());
     const now = Date.now();
     const existing = recorder.assistantStates.get(id) || {
@@ -232,10 +285,11 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     if (finalState.isFinal && !existing.finalized) {
       existing.finalized = true;
       const targetInteraction = findInteraction(recorder, existing.interactionID) || interaction;
+      const assistantText = extractMessageText(info) || storedMessageText(recorder, id);
       addStep(recorder, targetInteraction, {
         kind: "llm_call",
         phase: targetInteraction.mode,
-        title: summarizePrompt(extractMessageText(info), `Assistant response ${targetInteraction.index}`),
+        title: summarizePrompt(assistantText, `Assistant response ${targetInteraction.index}`),
         started_at: new Date(existing.firstSeenAt).toISOString(),
         ended_at: new Date(now).toISOString(),
         duration_ms: Math.max(0, now - existing.firstSeenAt),
@@ -350,12 +404,27 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     setSessionTitle,
     observeFileEdited,
     observeUserMessage,
+    observeMessagePartUpdated,
     observeAssistantMessage,
     observeToolBefore,
     observeToolAfter,
     finalizeSession,
     snapshotSession,
   };
+}
+
+function storeMessageTextPart(recorder, messageID, partID, text) {
+  const parts = recorder.messageTextParts.get(messageID) || new Map();
+  parts.set(partID, sanitizeDebuggerText(text));
+  recorder.messageTextParts.set(messageID, parts);
+}
+
+function storedMessageText(recorder, messageID) {
+  const parts = recorder.messageTextParts.get(messageID);
+  if (!parts) {
+    return "";
+  }
+  return sanitizeDebuggerText(Array.from(parts.values()).filter(Boolean).join("\n"));
 }
 
 function buildSessionPayload(recorder) {
@@ -483,6 +552,35 @@ function extractMessageInfo(event) {
     return event.properties.info;
   }
   return null;
+}
+
+function extractMessagePart(event) {
+  if (!event || typeof event !== "object") {
+    return null;
+  }
+  if (event.part && typeof event.part === "object") {
+    return event.part;
+  }
+  if (event.properties && event.properties.part && typeof event.properties.part === "object") {
+    return event.properties.part;
+  }
+  return null;
+}
+
+function parseMessageTime(info, fallback) {
+  const time = info && info.time;
+  if (time && typeof time === "object") {
+    return parseTimestamp(time.created, fallback);
+  }
+  return parseTimestamp(time, fallback);
+}
+
+function parsePartTime(part, fallback) {
+  const time = part && part.time;
+  if (time && typeof time === "object") {
+    return parseTimestamp(time.start ?? time.created, fallback);
+  }
+  return parseTimestamp(time, fallback);
 }
 
 function isAssistantMessage(info) {
