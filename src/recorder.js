@@ -73,10 +73,12 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     return recorder;
   }
 
-  function createInteraction(recorder, prompt, timestampMs) {
+  function createInteraction(recorder, prompt, timestampMs, messageID = "") {
     recorder.interactionCounter += 1;
+    const stableID = configuredValue(messageID, "");
+    const interactionID = stableID ? `${recorder.id}:int:${safeID(stableID)}` : `${recorder.id}:int:${recorder.interactionCounter}`;
     const interaction = {
-      id: `${recorder.id}:int:${recorder.interactionCounter}`,
+      id: interactionID,
       index: recorder.interactionCounter,
       prompt: configuredValue(prompt, `OpenCode interaction ${recorder.interactionCounter}`),
       mode: "build",
@@ -128,9 +130,21 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       return current || createInteraction(recorder, cleanPrompt, timestampMs);
     }
     recorder.seenUserMessages.add(messageID);
-    const interaction = createInteraction(recorder, cleanPrompt, timestampMs);
+    const interaction = createInteraction(recorder, cleanPrompt, timestampMs, messageID);
     recorder.messageInteractions.set(messageID, interaction.id);
     return interaction;
+  }
+
+  function interactionForMessage(recorder, messageID, fallbackTimestampMs, prompt = "") {
+    const interactionID = configuredValue(recorder.messageInteractions.get(messageID), "");
+    const interaction = interactionID ? findInteraction(recorder, interactionID) : null;
+    if (interaction) {
+      if (prompt && (!interaction.prompt || isGenericInteractionLabel(interaction.prompt))) {
+        interaction.prompt = prompt;
+      }
+      return interaction;
+    }
+    return ensureInteraction(recorder, fallbackTimestampMs, prompt);
   }
 
   function addStep(recorder, interaction, step) {
@@ -265,10 +279,14 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     }
     const recorder = ensureSession(sessionID, Date.now());
     recorder.messageRoles.set(id, "assistant");
-    const interaction = ensureInteraction(recorder, Date.now());
+    const parentID = messageParentID(info);
+    const parentInteractionID = configuredValue(recorder.messageInteractions.get(parentID), "");
+    const parentInteraction = parentInteractionID ? findInteraction(recorder, parentInteractionID) : null;
+    const interaction = parentInteraction || interactionForMessage(recorder, id, Date.now());
+    recorder.messageInteractions.set(id, interaction.id);
     const now = Date.now();
     const existing = recorder.assistantStates.get(id) || {
-      firstSeenAt: parseTimestamp(info && info.time, now),
+      firstSeenAt: parseMessageTime(info, now),
       firstTokenAt: null,
       interactionID: interaction.id,
       provider: assistantProvider(info),
@@ -326,9 +344,12 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       return null;
     }
     const recorder = ensureSession(sessionID, Date.now());
+    const messageID = toolMessageID(input);
+    const interactionID = configuredValue(recorder.messageInteractions.get(messageID), configuredValue(recorder.currentInteractionID, ""));
     recorder.toolStarts.set(callID, {
       startedAt: Date.now(),
       tool: configuredValue(input && input.tool, "unknown"),
+      interactionID,
     });
     return { sessionID, callID, tool: configuredValue(input && input.tool, "unknown") };
   }
@@ -343,7 +364,9 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const toolState = callID && recorder.toolStarts.has(callID)
       ? recorder.toolStarts.get(callID)
       : { startedAt: Date.now(), tool: configuredValue(input && input.tool, "unknown") };
-    const interaction = ensureInteraction(recorder, Date.now());
+    const messageID = toolMessageID(input) || toolMessageID(output);
+    const mappedInteractionID = configuredValue(toolState.interactionID, configuredValue(recorder.messageInteractions.get(messageID), ""));
+    const interaction = mappedInteractionID ? findInteraction(recorder, mappedInteractionID) || ensureInteraction(recorder, Date.now()) : ensureInteraction(recorder, Date.now());
     addStep(recorder, interaction, {
       kind: "tool_call",
       phase: interaction.mode,
@@ -610,8 +633,27 @@ function messageID(info) {
   return configuredValue(info && info.id, "");
 }
 
+function messageParentID(info) {
+  return configuredValue(info && (info.parentID ?? info.parentId ?? info.parent_id), "");
+}
+
 function messageSessionID(info, event) {
   return configuredValue(info && info.sessionID, configuredValue(event && event.sessionID, ""));
+}
+
+function toolMessageID(value) {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  return configuredValue(
+    value.messageID ?? value.messageId ?? value.message_id,
+    configuredValue(value.assistantMessageID ?? value.assistantMessageId ?? value.assistant_message_id, configuredValue(value.properties?.messageID ?? value.properties?.messageId ?? value.properties?.message_id, "")),
+  );
+}
+
+function safeID(value) {
+  const cleaned = String(value || "").replace(/[^A-Za-z0-9_.:-]/g, "_");
+  return cleaned || "unknown";
 }
 
 function assistantProvider(info) {

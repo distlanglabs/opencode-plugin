@@ -262,3 +262,53 @@ test("updates user text part without duplicating interactions", () => {
   assert.equal(payload.interactions.length, 1);
   assert.equal(payload.interactions[0].prompt, "Final prompt");
 });
+
+test("uses OpenCode message lineage for stable multi-interaction sessions", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-9", info: { id: "session-9" } });
+
+  recorder.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-9a", sessionID: "session-9", role: "user", content: "First request" } } });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    properties: { info: { id: "assistant-9a", parentID: "user-9a", sessionID: "session-9", role: "assistant", status: "completed", text: "First answer", tokens: { input: 10, output: 5 } } },
+  });
+
+  recorder.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-9b", sessionID: "session-9", role: "user", content: "Second request" } } });
+  recorder.observeToolBefore({ sessionID: "session-9", messageID: "assistant-9b", callID: "tool-9b", tool: "bash" });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    properties: { info: { id: "assistant-9b", parentID: "user-9b", sessionID: "session-9", role: "assistant", status: "completed", text: "Second answer", tokens: { input: 20, output: 8 } } },
+  });
+  recorder.observeToolAfter({ sessionID: "session-9", messageID: "assistant-9b", callID: "tool-9b", tool: "bash" }, {});
+
+  const payload = recorder.finalizeSession("session-9", "success", Date.now());
+  assert.equal(payload.interactions.length, 2);
+  assert.equal(payload.interactions[0].id, "session-9:int:user-9a");
+  assert.equal(payload.interactions[1].id, "session-9:int:user-9b");
+  assert.equal(payload.interactions[0].prompt, "First request");
+  assert.equal(payload.interactions[1].prompt, "Second request");
+  assert.equal(payload.interactions[0].steps.length, 1);
+  assert.equal(payload.interactions[0].steps[0].title, "First answer");
+  assert.equal(payload.interactions[1].steps.length, 2);
+  assert.deepEqual(payload.interactions[1].steps.map((step) => step.kind).sort(), ["llm_call", "tool_call"]);
+});
+
+test("snapshot preserves at least ten prompt interactions", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-10", info: { id: "session-10" } });
+
+  for (let index = 1; index <= 12; index += 1) {
+    recorder.observeUserMessage({ type: "message.updated", properties: { info: { id: `user-10-${index}`, sessionID: "session-10", role: "user", content: `Prompt ${index}` } } });
+    recorder.observeAssistantMessage({
+      type: "message.updated",
+      properties: { info: { id: `assistant-10-${index}`, parentID: `user-10-${index}`, sessionID: "session-10", role: "assistant", done: true, text: `Answer ${index}`, tokens: { input: 10 + index, output: index } } },
+    });
+  }
+
+  const payload = recorder.snapshotSession("session-10", "success", Date.now());
+  assert.equal(payload.interactions.length, 12);
+  assert.equal(payload.interactions[0].prompt, "Prompt 1");
+  assert.equal(payload.interactions[9].prompt, "Prompt 10");
+  assert.equal(payload.interactions[11].prompt, "Prompt 12");
+  assert.equal(payload.interactions.every((interaction) => interaction.steps.length === 1), true);
+});

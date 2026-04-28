@@ -130,6 +130,29 @@ npm test
 npm run pack:check
 ```
 
+### Local OpenCode integration test
+
+The repository includes a live local integration harness. It is not included in the published npm package.
+
+The harness uses your existing local OpenCode auth to run the requested model. It does not read, copy, or print OpenCode credential files. It writes only a temporary OpenCode config that loads this local plugin source.
+
+```bash
+npm run test:opencode -- --model openai/gpt-5.5
+```
+
+If `--model` and `OPENCODE_MODEL` are omitted, the harness defaults to `openai/gpt-5.5`. Use any provider-qualified model ID shown by `opencode models`.
+
+Useful flags:
+
+- `--require-upload` fails unless Distlang auth is available and the uploaded AI Debugger session validates.
+- `--keep-session` keeps the uploaded AI Debugger session for dashboard inspection.
+- `--keep-temp` keeps temporary logs and fixtures for debugging. Do not commit those files.
+- `--verbose` prints redacted command output.
+
+The default test validates local plugin capture from the plugin debug log. If `distlang` is authenticated, it also validates the uploaded session and deletes it unless `--keep-session` is set.
+
+For upload validation, the harness resolves Distlang from `DISTLANG_BIN`, `distlang` on `PATH`, or the plugin-managed binary at `~/.cache/distlang/opencode-plugin/bin/distlang`.
+
 ## Release
 
 This repo uses a manual release flow.
@@ -149,7 +172,7 @@ git push origin main
 3. Publish to npm:
 
 ```bash
-npm run publish
+npm run publish:public
 ```
 
 4. Create and push the release tag:
