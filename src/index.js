@@ -375,15 +375,16 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       }
 
 
+
       if (event.type === "session.idle" || event.type === "session.error") {
 	      const sessionID = configuredValue(event.sessionID, recorder.activeSessionID());
 	      if (!sessionID) {
-	        await debugLog("Session terminal event missing sessionID", { type: event.type, eventKeys: Object.keys(event) });
+	        await debugLog("Session snapshot event missing sessionID", { type: event.type, eventKeys: Object.keys(event) });
 	        return;
 	      }
 	      const result = event.type === "session.error" ? "error" : "success";
 	      await debugLog(`${event.type} observed`, { sessionID, result });
-	      await finalizeSession(sessionID, result);
+	      await uploadSessionSnapshot(sessionID, result);
 	      return;
 	    }
 

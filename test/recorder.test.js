@@ -312,3 +312,25 @@ test("snapshot preserves at least ten prompt interactions", () => {
   assert.equal(payload.interactions[11].prompt, "Prompt 12");
   assert.equal(payload.interactions.every((interaction) => interaction.steps.length === 1), true);
 });
+
+test("idle snapshots do not clear later interactions", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-11", info: { id: "session-11" } });
+
+  recorder.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-11a", sessionID: "session-11", role: "user", content: "Plan the fix" } } });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    properties: { info: { id: "assistant-11a", parentID: "user-11a", sessionID: "session-11", role: "assistant", done: true, text: "Plan done", tokens: { input: 15, output: 4 } } },
+  });
+  const firstSnapshot = recorder.snapshotSession("session-11", "success", Date.parse("2026-04-25T00:00:02.000Z"));
+  assert.equal(firstSnapshot.interactions.length, 1);
+
+  recorder.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-11b", sessionID: "session-11", role: "user", content: "Build the fix" } } });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    properties: { info: { id: "assistant-11b", parentID: "user-11b", sessionID: "session-11", role: "assistant", done: true, text: "Build done", tokens: { input: 25, output: 6 } } },
+  });
+  const secondSnapshot = recorder.snapshotSession("session-11", "success", Date.parse("2026-04-25T00:00:04.000Z"));
+  assert.equal(secondSnapshot.interactions.length, 2);
+  assert.deepEqual(secondSnapshot.interactions.map((interaction) => interaction.prompt), ["Plan the fix", "Build the fix"]);
+});
