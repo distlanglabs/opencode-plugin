@@ -169,7 +169,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
 
   function addStep(recorder, interaction, step) {
     recorder.stepCounter += 1;
-    const stepID = `${recorder.id}:step:${recorder.stepCounter}`;
+    const stepID = configuredValue(step.id, `${recorder.id}:step:${recorder.stepCounter}`);
     const normalized = {
       id: stepID,
       index: recorder.stepCounter,
@@ -239,6 +239,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const recorder = ensureSession(sessionID, Date.now());
     const interaction = ensureInteraction(recorder, Date.now(), "", inferInteractionMode(event));
     addStep(recorder, interaction, {
+      id: `${recorder.id}:step:file:${safeID(filePath)}:${Date.now()}`,
       kind: "file_edit",
       phase: interaction.mode,
       title: `Edit ${filePath}`,
@@ -346,6 +347,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       const loopIteration = targetInteraction.steps.filter((step) => step.kind === "llm_call").length + 1;
       const previousToolStep = findPreviousToolStep(targetInteraction, id);
       const llmStep = addStep(recorder, targetInteraction, {
+        id: `${recorder.id}:step:llm:${safeID(id)}`,
         kind: "llm_call",
         phase: targetInteraction.mode,
         title: summarizePrompt(assistantText, `Model response for Interaction ${targetInteraction.index}`),
@@ -444,6 +446,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const interaction = mappedInteractionID ? findInteraction(recorder, mappedInteractionID) || ensureInteraction(recorder, Date.now(), "", mode) : ensureInteraction(recorder, Date.now(), "", mode);
     applyInteractionMode(interaction, mode);
     const toolStep = addStep(recorder, interaction, {
+      id: callID ? `${recorder.id}:step:tool:${safeID(callID)}` : `${recorder.id}:step:tool:${safeID(messageID || configuredValue(toolState.messageID, "") || Date.now())}`,
       kind: "tool_call",
       phase: interaction.mode,
       title: `Run ${configuredValue(toolState.tool, "unknown")}`,

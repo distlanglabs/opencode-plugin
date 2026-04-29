@@ -338,6 +338,30 @@ test("uses OpenCode message lineage for stable multi-interaction sessions", () =
   assert.equal(previousResponses.metadata_json.top_items[0].label, "Previous assistant response from Interaction 1");
 });
 
+test("uses OpenCode identifiers for stable step ids across recorder restarts", () => {
+  const first = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  first.observeSessionCreated({ type: "session.created", sessionID: "session-stable", info: { id: "session-stable" } });
+  first.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-stable", sessionID: "session-stable", role: "user", content: "Run stable ids" } } });
+  first.observeToolBefore({ sessionID: "session-stable", messageID: "assistant-stable", callID: "tool-stable", tool: "bash" });
+  first.observeToolAfter({ sessionID: "session-stable", messageID: "assistant-stable", callID: "tool-stable", tool: "bash" }, {});
+  first.observeAssistantMessage({ type: "message.updated", properties: { info: { id: "assistant-stable", parentID: "user-stable", sessionID: "session-stable", role: "assistant", done: true, text: "Done", tokens: { input: 10, output: 3 } } } });
+
+  const second = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  second.observeSessionCreated({ type: "session.created", sessionID: "session-stable", info: { id: "session-stable" } });
+  second.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-stable", sessionID: "session-stable", role: "user", content: "Run stable ids" } } });
+  second.observeToolBefore({ sessionID: "session-stable", messageID: "assistant-stable", callID: "tool-stable", tool: "bash" });
+  second.observeToolAfter({ sessionID: "session-stable", messageID: "assistant-stable", callID: "tool-stable", tool: "bash" }, {});
+  second.observeAssistantMessage({ type: "message.updated", properties: { info: { id: "assistant-stable", parentID: "user-stable", sessionID: "session-stable", role: "assistant", done: true, text: "Done", tokens: { input: 10, output: 3 } } } });
+
+  const firstSteps = first.finalizeSession("session-stable", "success", Date.now()).interactions[0].steps;
+  const secondSteps = second.finalizeSession("session-stable", "success", Date.now()).interactions[0].steps;
+  assert.deepEqual(firstSteps.map((step) => step.id).sort(), secondSteps.map((step) => step.id).sort());
+  assert.deepEqual(firstSteps.map((step) => step.id).sort(), [
+    "session-stable:step:llm:assistant-stable",
+    "session-stable:step:tool:tool-stable",
+  ]);
+});
+
 test("snapshot preserves at least ten prompt interactions", () => {
   const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
   recorder.observeSessionCreated({ type: "session.created", sessionID: "session-10", info: { id: "session-10" } });
