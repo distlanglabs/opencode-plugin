@@ -34,6 +34,7 @@ const extensionLanguages = {
 
 export function createRecorder({ project, directory, initialPrompt = "" }) {
   const projectName = deriveProjectName(project, directory);
+  const initialMode = inferInteractionMode(initialPrompt);
   const configuredInitialPrompt = sanitizeDebuggerText(initialPrompt);
   const sessions = new Map();
 
@@ -58,6 +59,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       summary: "",
       title: "",
       initialPrompt: configuredInitialPrompt,
+      initialMode,
       interactions: [],
       currentInteractionID: "",
       interactionCounter: 0,
@@ -75,7 +77,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     return recorder;
   }
 
-  function createInteraction(recorder, prompt, timestampMs, messageID = "") {
+  function createInteraction(recorder, prompt, timestampMs, messageID = "", mode = inferInteractionMode(prompt)) {
     recorder.interactionCounter += 1;
     const stableID = configuredValue(messageID, "");
     const interactionID = stableID ? `${recorder.id}:int:${safeID(stableID)}` : `${recorder.id}:int:${recorder.interactionCounter}`;
@@ -83,7 +85,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       id: interactionID,
       index: recorder.interactionCounter,
       prompt: configuredValue(prompt, `OpenCode interaction ${recorder.interactionCounter}`),
-      mode: "build",
+      mode,
       startedAtMs: timestampMs,
       endedAtMs: 0,
       status: "success",
@@ -99,24 +101,26 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     return recorder.interactions.find((interaction) => interaction.id === interactionID) || null;
   }
 
-  function ensureInteraction(recorder, timestampMs, prompt = "") {
+  function ensureInteraction(recorder, timestampMs, prompt = "", mode = inferInteractionMode(prompt)) {
     const current = findInteraction(recorder, recorder.currentInteractionID);
     if (current) {
       if (prompt && (!current.prompt || isGenericInteractionLabel(current.prompt))) {
         current.prompt = prompt;
       }
+      applyInteractionMode(current, mode);
       return current;
     }
-    return createInteraction(recorder, configuredValue(prompt, recorder.initialPrompt), timestampMs);
+    return createInteraction(recorder, configuredValue(prompt, recorder.initialPrompt), timestampMs, "", mode === "plan" ? mode : recorder.initialMode);
   }
 
-  function observeUserPrompt(recorder, messageID, prompt, timestampMs) {
+  function observeUserPrompt(recorder, messageID, prompt, timestampMs, mode = inferInteractionMode(prompt)) {
     const cleanPrompt = sanitizeDebuggerText(prompt);
     const existingID = recorder.messageInteractions.get(messageID);
     const existing = existingID ? findInteraction(recorder, existingID) : null;
     if (existing) {
       existing.prompt = cleanPrompt;
       existing.summary = summarizePrompt(cleanPrompt, existing.summary || `Interaction ${existing.index}`);
+      applyInteractionMode(existing, mode);
       return existing;
     }
     const current = findInteraction(recorder, recorder.currentInteractionID);
@@ -124,29 +128,35 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     if (current && isGenericInteractionLabel(current.prompt) && !currentHasMessage) {
       current.prompt = cleanPrompt;
       current.summary = summarizePrompt(cleanPrompt, `Interaction ${current.index}`);
+      applyInteractionMode(current, mode);
       recorder.messageInteractions.set(messageID, current.id);
       recorder.seenUserMessages.add(messageID);
       return current;
     }
     if (recorder.seenUserMessages.has(messageID)) {
-      return current || createInteraction(recorder, cleanPrompt, timestampMs);
+      if (current) {
+        applyInteractionMode(current, mode);
+        return current;
+      }
+      return createInteraction(recorder, cleanPrompt, timestampMs, "", mode);
     }
     recorder.seenUserMessages.add(messageID);
-    const interaction = createInteraction(recorder, cleanPrompt, timestampMs, messageID);
+    const interaction = createInteraction(recorder, cleanPrompt, timestampMs, messageID, mode);
     recorder.messageInteractions.set(messageID, interaction.id);
     return interaction;
   }
 
-  function interactionForMessage(recorder, messageID, fallbackTimestampMs, prompt = "") {
+  function interactionForMessage(recorder, messageID, fallbackTimestampMs, prompt = "", mode = inferInteractionMode(prompt)) {
     const interactionID = configuredValue(recorder.messageInteractions.get(messageID), "");
     const interaction = interactionID ? findInteraction(recorder, interactionID) : null;
     if (interaction) {
       if (prompt && (!interaction.prompt || isGenericInteractionLabel(interaction.prompt))) {
         interaction.prompt = prompt;
       }
+      applyInteractionMode(interaction, mode);
       return interaction;
     }
-    return ensureInteraction(recorder, fallbackTimestampMs, prompt);
+    return ensureInteraction(recorder, fallbackTimestampMs, prompt, mode);
   }
 
   function addStep(recorder, interaction, step) {
@@ -219,10 +229,10 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       return null;
     }
     const recorder = ensureSession(sessionID, Date.now());
-    const interaction = ensureInteraction(recorder, Date.now());
+    const interaction = ensureInteraction(recorder, Date.now(), "", inferInteractionMode(event));
     addStep(recorder, interaction, {
       kind: "file_edit",
-      phase: "build",
+      phase: interaction.mode,
       title: `Edit ${filePath}`,
       started_at: new Date().toISOString(),
       ended_at: new Date().toISOString(),
@@ -241,11 +251,12 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const recorder = ensureSession(sessionID, Date.now());
     const id = messageID(info) || `${sessionID}:user:${Date.now()}`;
     recorder.messageRoles.set(id, "user");
+    const mode = inferInteractionMode(info, event);
     const prompt = extractMessageText(info) || storedMessageText(recorder, id);
     if (!prompt) {
       return { sessionID, messageID: id, prompt: "" };
     }
-    const interaction = observeUserPrompt(recorder, id, prompt, parseMessageTime(info, Date.now()));
+    const interaction = observeUserPrompt(recorder, id, prompt, parseMessageTime(info, Date.now()), mode);
     addContextContributor(recorder, {
       category: "user_prompt",
       label: `User prompt ${interaction.index}`,
@@ -273,7 +284,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     if (role !== "user") {
       return { sessionID, messageID, role: configuredValue(role, "unknown"), text };
     }
-    const interaction = observeUserPrompt(recorder, messageID, storedMessageText(recorder, messageID), parsePartTime(part, Date.now()));
+    const interaction = observeUserPrompt(recorder, messageID, storedMessageText(recorder, messageID), parsePartTime(part, Date.now()), inferInteractionMode(part, event));
     return { sessionID, messageID, role, text: interaction.prompt };
   }
 
@@ -292,7 +303,10 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const parentID = messageParentID(info);
     const parentInteractionID = configuredValue(recorder.messageInteractions.get(parentID), "");
     const parentInteraction = parentInteractionID ? findInteraction(recorder, parentInteractionID) : null;
-    const interaction = parentInteraction || interactionForMessage(recorder, id, Date.now());
+    const assistantText = extractMessageText(info) || storedMessageText(recorder, id);
+    const mode = inferInteractionMode(info, event, assistantText);
+    const interaction = parentInteraction || interactionForMessage(recorder, id, Date.now(), "", mode);
+    applyInteractionMode(interaction, mode);
     recorder.messageInteractions.set(id, interaction.id);
     const now = Date.now();
     const existing = recorder.assistantStates.get(id) || {
@@ -313,7 +327,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     if (finalState.isFinal && !existing.finalized) {
       existing.finalized = true;
       const targetInteraction = findInteraction(recorder, existing.interactionID) || interaction;
-      const assistantText = extractMessageText(info) || storedMessageText(recorder, id);
+      applyInteractionMode(targetInteraction, mode);
       addStep(recorder, targetInteraction, {
         kind: "llm_call",
         phase: targetInteraction.mode,
@@ -363,6 +377,8 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const recorder = ensureSession(sessionID, Date.now());
     const messageID = toolMessageID(input);
     const interactionID = configuredValue(recorder.messageInteractions.get(messageID), configuredValue(recorder.currentInteractionID, ""));
+    const interaction = interactionID ? findInteraction(recorder, interactionID) : null;
+    applyInteractionMode(interaction, inferInteractionMode(input));
     recorder.toolStarts.set(callID, {
       startedAt: Date.now(),
       tool: configuredValue(input && input.tool, "unknown"),
@@ -383,7 +399,9 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       : { startedAt: Date.now(), tool: configuredValue(input && input.tool, "unknown") };
     const messageID = toolMessageID(input) || toolMessageID(output);
     const mappedInteractionID = configuredValue(toolState.interactionID, configuredValue(recorder.messageInteractions.get(messageID), ""));
-    const interaction = mappedInteractionID ? findInteraction(recorder, mappedInteractionID) || ensureInteraction(recorder, Date.now()) : ensureInteraction(recorder, Date.now());
+    const mode = inferInteractionMode(input, output);
+    const interaction = mappedInteractionID ? findInteraction(recorder, mappedInteractionID) || ensureInteraction(recorder, Date.now(), "", mode) : ensureInteraction(recorder, Date.now(), "", mode);
+    applyInteractionMode(interaction, mode);
     addStep(recorder, interaction, {
       kind: "tool_call",
       phase: interaction.mode,
@@ -985,6 +1003,41 @@ function summarizePrompt(prompt, fallback) {
     return trimmed;
   }
   return `${trimmed.slice(0, 77)}...`;
+}
+
+function inferInteractionMode(...values) {
+  const normalized = values.map((value) => {
+    if (typeof value === "string") {
+      return value;
+    }
+    try {
+      return JSON.stringify(value || {});
+    } catch {
+      return "";
+    }
+  }).join("\n").toLowerCase();
+  if (
+    normalized.includes("plan mode - system reminder") ||
+    normalized.includes("plan mode active") ||
+    normalized.includes('"mode":"plan"') ||
+    normalized.includes('"modeid":"plan"') ||
+    normalized.includes('"mode_id":"plan"')
+  ) {
+    return "plan";
+  }
+  return "build";
+}
+
+function applyInteractionMode(interaction, mode) {
+  if (!interaction || mode !== "plan") {
+    return;
+  }
+  interaction.mode = "plan";
+  for (const step of interaction.steps) {
+    if (step.phase === "build") {
+      step.phase = "plan";
+    }
+  }
 }
 
 function inferResultStatus(values, fallback = "success") {

@@ -341,3 +341,44 @@ test("idle snapshots do not clear later interactions", () => {
   assert.equal(secondSnapshot.interactions.length, 2);
   assert.deepEqual(secondSnapshot.interactions.map((interaction) => interaction.prompt), ["Plan the fix", "Build the fix"]);
 });
+
+test("records plan mode from raw user message before sanitizing reminder text", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-12", info: { id: "session-12" } });
+  recorder.observeUserMessage({
+    type: "message.updated",
+    properties: {
+      info: {
+        id: "user-12",
+        sessionID: "session-12",
+        role: "user",
+        content: "Review this change\n# Plan Mode - System Reminder\nPlan mode ACTIVE",
+      },
+    },
+  });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    properties: { info: { id: "assistant-12", parentID: "user-12", sessionID: "session-12", role: "assistant", done: true, text: "Plan complete", tokens: { input: 10, output: 3 } } },
+  });
+
+  const payload = recorder.finalizeSession("session-12", "success", Date.now());
+  assert.equal(payload.interactions[0].mode, "plan");
+  assert.equal(payload.interactions[0].prompt, "Review this change\nPlan mode ACTIVE");
+  assert.equal(payload.interactions[0].steps[0].phase, "plan");
+});
+
+test("updates existing build steps when later event identifies plan mode", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-13", info: { id: "session-13" } });
+  recorder.observeUserMessage({ type: "message.updated", properties: { info: { id: "user-13", sessionID: "session-13", role: "user", content: "Check the mode" } } });
+  recorder.observeToolBefore({ sessionID: "session-13", messageID: "assistant-13", callID: "tool-13", tool: "read" });
+  recorder.observeToolAfter({ sessionID: "session-13", messageID: "assistant-13", callID: "tool-13", tool: "read" }, {});
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    properties: { info: { id: "assistant-13", parentID: "user-13", sessionID: "session-13", role: "assistant", mode: "plan", done: true, text: "Checked", tokens: { input: 10, output: 3 } } },
+  });
+
+  const payload = recorder.finalizeSession("session-13", "success", Date.now());
+  assert.equal(payload.interactions[0].mode, "plan");
+  assert.deepEqual(payload.interactions[0].steps.map((step) => step.phase), ["plan", "plan"]);
+});
