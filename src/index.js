@@ -457,6 +457,15 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
         await debugLog("tool.execute.after observed", observed);
       }
     },
+
+    "experimental.chat.system.transform": async (input, output) => {
+      await logInit();
+      const sessionID = configuredValue(input && input.sessionID, recorder.activeSessionID());
+      const observed = recorder.observeSystemPrompt(sessionID, output && output.system);
+      if (observed) {
+        await debugLog("experimental.chat.system.transform observed", observed);
+      }
+    },
   };
 };
 

@@ -19,6 +19,9 @@ test("captures OpenCode title, token usage, context, and sanitized text", () => 
       content: "Fix billing totals <system-reminder>SECRET</system-reminder>",
     },
   });
+  recorder.observeSystemPrompt("session-1", ["system prompt text", "environment block"]);
+  recorder.observeToolBefore({ sessionID: "session-1", callID: "tool-1", tool: "read", messageID: "assistant-1" });
+  recorder.observeToolAfter({ sessionID: "session-1", callID: "tool-1", tool: "read", messageID: "assistant-1" }, { output: "x".repeat(4000), metadata: { description: "read output" } });
   recorder.observeAssistantMessage({
     type: "message.updated",
     info: {
@@ -53,6 +56,10 @@ test("captures OpenCode title, token usage, context, and sanitized text", () => 
   assert.ok(llmStep);
   assert.equal(llmStep.context_size_tokens, 1450);
   assert.equal(llmStep.model, "gpt-5.5");
+  assert.ok(llmStep.details.some((detail) => detail.category === "tool_output"));
+  assert.ok(llmStep.details.some((detail) => detail.category === "system_prompt"));
+  const toolDetail = llmStep.details.find((detail) => detail.category === "tool_output");
+  assert.equal(toolDetail.metadata_json.top_items[0].label, "Tool read");
 });
 
 test("uses explicit context token field when OpenCode provides it", () => {

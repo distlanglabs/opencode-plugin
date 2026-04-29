@@ -68,6 +68,8 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       messageInteractions: new Map(),
       toolStarts: new Map(),
       seenUserMessages: new Set(),
+      contextContributors: [],
+      systemContributors: [],
     };
     sessions.set(sessionID, recorder);
     return recorder;
@@ -149,8 +151,9 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
 
   function addStep(recorder, interaction, step) {
     recorder.stepCounter += 1;
+    const stepID = `${recorder.id}:step:${recorder.stepCounter}`;
     const normalized = {
-      id: `${recorder.id}:step:${recorder.stepCounter}`,
+      id: stepID,
       index: recorder.stepCounter,
       kind: step.kind,
       phase: configuredValue(step.phase, "build"),
@@ -171,6 +174,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       first_token_at: step.first_token_at ? normalizeDateTime(step.first_token_at, new Date().toISOString()) : null,
       first_token_latency_ms: Math.max(0, Math.floor(finiteNumber(step.first_token_latency_ms))),
       payload_json: step.payload_json ?? null,
+      details: normalizeStepDetails(step.details, stepID, interaction.id),
     };
     interaction.steps.push(normalized);
     interaction.endedAtMs = Math.max(interaction.endedAtMs || 0, Date.parse(normalized.ended_at || normalized.started_at));
@@ -242,6 +246,12 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       return { sessionID, messageID: id, prompt: "" };
     }
     const interaction = observeUserPrompt(recorder, id, prompt, parseMessageTime(info, Date.now()));
+    addContextContributor(recorder, {
+      category: "user_prompt",
+      label: `User prompt ${interaction.index}`,
+      source: "opencode.message",
+      text: prompt,
+    });
     return { sessionID, messageID: id, prompt: interaction.prompt };
   }
 
@@ -323,6 +333,13 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
         first_token_at: existing.firstTokenAt != null ? new Date(existing.firstTokenAt).toISOString() : null,
         first_token_latency_ms: existing.firstTokenAt != null ? Math.max(0, existing.firstTokenAt - existing.firstSeenAt) : 0,
         payload_json: { message_id: id },
+        details: buildLLMStepDetails(recorder, targetInteraction, id),
+      });
+      addContextContributor(recorder, {
+        category: "assistant_history",
+        label: `Assistant response ${targetInteraction.index}`,
+        source: "opencode.message",
+        text: assistantText,
       });
     }
     recorder.assistantStates.set(id, existing);
@@ -378,6 +395,13 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       tool_name: configuredValue(toolState.tool, "unknown"),
       payload_json: output && output.metadata && typeof output.metadata === "object" ? output.metadata : null,
     });
+    addContextContributor(recorder, {
+      category: "tool_output",
+      label: `Tool ${configuredValue(toolState.tool, "unknown")}`,
+      source: "opencode.tool",
+      text: extractToolOutputText(output),
+      metadata: safeToolMetadata(output),
+    });
     if (callID) {
       recorder.toolStarts.delete(callID);
     }
@@ -420,6 +444,22 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     return buildSessionPayload(recorder);
   }
 
+  function observeSystemPrompt(sessionID, system) {
+    const id = configuredValue(sessionID, activeSessionID());
+    if (!id) {
+      return null;
+    }
+    const recorder = ensureSession(id, Date.now());
+    const entries = Array.isArray(system) ? system : [];
+    recorder.systemContributors = entries.map((text, index) => contextContributor({
+      category: index === 0 ? "system_prompt" : "instructions",
+      label: index === 0 ? "OpenCode system prompt" : `System instruction ${index + 1}`,
+      source: "opencode.system",
+      text: String(text || ""),
+    })).filter((item) => item.char_count > 0);
+    return { sessionID: id, details: recorder.systemContributors.length };
+  }
+
   return {
     activeSessionID,
     observeSessionCreated,
@@ -433,6 +473,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     observeToolAfter,
     finalizeSession,
     snapshotSession,
+    observeSystemPrompt,
   };
 }
 
@@ -440,6 +481,135 @@ function storeMessageTextPart(recorder, messageID, partID, text) {
   const parts = recorder.messageTextParts.get(messageID) || new Map();
   parts.set(partID, sanitizeDebuggerText(text));
   recorder.messageTextParts.set(messageID, parts);
+}
+
+function addContextContributor(recorder, input) {
+  const contributor = contextContributor(input);
+  if (contributor.char_count <= 0) {
+    return;
+  }
+  recorder.contextContributors.push(contributor);
+  if (recorder.contextContributors.length > 200) {
+    recorder.contextContributors = recorder.contextContributors.slice(-200);
+  }
+}
+
+function contextContributor(input) {
+  const text = configuredValue(input && input.text, "");
+  const charCount = text.length;
+  return {
+    category: configuredValue(input && input.category, "unknown"),
+    label: safeDetailLabel(input && input.label, configuredValue(input && input.category, "unknown")),
+    source: configuredValue(input && input.source, "opencode"),
+    token_estimate: estimateTokens(text),
+    char_count: charCount,
+    item_count: 1,
+    metadata_json: input && input.metadata && typeof input.metadata === "object" ? input.metadata : null,
+  };
+}
+
+function buildLLMStepDetails(recorder, interaction, assistantMessageID) {
+  const contributors = [
+    ...recorder.systemContributors,
+    ...recorder.contextContributors,
+  ].filter((item) => item && item.char_count > 0);
+  const byCategory = new Map();
+  for (const item of contributors) {
+    const category = configuredValue(item.category, "unknown");
+    const current = byCategory.get(category) || {
+      category,
+      label: detailCategoryLabel(category),
+      token_estimate: 0,
+      char_count: 0,
+      item_count: 0,
+      source: item.source,
+      top_items: [],
+    };
+    current.token_estimate += Math.max(0, Math.floor(finiteNumber(item.token_estimate)));
+    current.char_count += Math.max(0, Math.floor(finiteNumber(item.char_count)));
+    current.item_count += Math.max(1, Math.floor(finiteNumber(item.item_count)) || 1);
+    current.top_items.push({
+      label: safeDetailLabel(item.label, detailCategoryLabel(category)),
+      token_estimate: Math.max(0, Math.floor(finiteNumber(item.token_estimate))),
+      char_count: Math.max(0, Math.floor(finiteNumber(item.char_count))),
+      source: configuredValue(item.source, "opencode"),
+      ...(item.metadata_json ? { metadata: item.metadata_json } : {}),
+    });
+    byCategory.set(category, current);
+  }
+  return Array.from(byCategory.values())
+    .sort((left, right) => right.token_estimate - left.token_estimate || left.category.localeCompare(right.category))
+    .map((item, index) => ({
+      id: `${assistantMessageID || interaction.id}:detail:${index + 1}`,
+      index: index + 1,
+      category: item.category,
+      label: item.label,
+      token_estimate: item.token_estimate,
+      char_count: item.char_count,
+      item_count: item.item_count,
+      source: item.source,
+      metadata_json: {
+        top_items: item.top_items
+          .sort((left, right) => right.token_estimate - left.token_estimate)
+          .slice(0, 5),
+      },
+    }));
+}
+
+function normalizeStepDetails(details, stepID, interactionID) {
+  if (!Array.isArray(details)) {
+    return [];
+  }
+  return details.map((detail, index) => ({
+    id: configuredValue(detail && detail.id, `${stepID}:detail:${index + 1}`),
+    step_id: stepID,
+    interaction_id: interactionID,
+    index: Math.max(1, Math.floor(finiteNumber(detail && detail.index)) || index + 1),
+    category: configuredValue(detail && detail.category, "unknown"),
+    label: safeDetailLabel(detail && detail.label, configuredValue(detail && detail.category, "unknown")),
+    token_estimate: Math.max(0, Math.floor(finiteNumber(detail && detail.token_estimate))),
+    char_count: Math.max(0, Math.floor(finiteNumber(detail && detail.char_count))),
+    item_count: Math.max(0, Math.floor(finiteNumber(detail && detail.item_count))),
+    source: configuredValue(detail && detail.source, "") || null,
+    metadata_json: detail && detail.metadata_json && typeof detail.metadata_json === "object" ? detail.metadata_json : null,
+  }));
+}
+
+function estimateTokens(text) {
+  return Math.max(0, Math.round(String(text || "").length / 4));
+}
+
+function detailCategoryLabel(category) {
+  return String(category || "unknown").split("_").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
+}
+
+function safeDetailLabel(value, fallback) {
+  const label = configuredValue(value, fallback).replace(/\s+/g, " ").trim();
+  return label.length > 120 ? `${label.slice(0, 117)}...` : label;
+}
+
+function extractToolOutputText(output) {
+  if (!output || typeof output !== "object") {
+    return "";
+  }
+  if (typeof output.output === "string") {
+    return output.output;
+  }
+  if (typeof output.text === "string") {
+    return output.text;
+  }
+  if (output.metadata && typeof output.metadata.output === "string") {
+    return output.metadata.output;
+  }
+  if (Array.isArray(output.content)) {
+    return output.content.map((item) => item && typeof item.text === "string" ? item.text : "").filter(Boolean).join("\n");
+  }
+  return "";
+}
+
+function safeToolMetadata(output) {
+  const attachments = Array.isArray(output && output.attachments) ? output.attachments : [];
+  return attachments.length > 0 ? { attachments: attachments.length } : null;
 }
 
 function storedMessageText(recorder, messageID) {
