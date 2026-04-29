@@ -54,8 +54,18 @@ test("captures OpenCode title, token usage, context, and sanitized text", () => 
   assert.equal(payload.interactions[0].prompt, "Fix billing totals");
   const llmStep = payload.interactions[0].steps.find((step) => step.kind === "llm_call");
   assert.ok(llmStep);
+  assert.equal(llmStep.payload_json.message_id, "assistant-1");
+  assert.equal(llmStep.payload_json.parent_message_id, "user-1");
+  assert.equal(llmStep.payload_json.loop_iteration, 1);
+  assert.equal(llmStep.payload_json.caused_by.type, "tool_result");
   assert.equal(llmStep.context_size_tokens, 1450);
   assert.equal(llmStep.model, "gpt-5.5");
+  const toolStep = payload.interactions[0].steps.find((step) => step.kind === "tool_call");
+  assert.ok(toolStep);
+  assert.equal(toolStep.payload_json.call_id, "tool-1");
+  assert.equal(toolStep.payload_json.message_id, "assistant-1");
+  assert.equal(toolStep.payload_json.parent_llm_step_id, llmStep.id);
+  assert.equal(toolStep.payload_json.relationship, "requested_by_model");
   assert.ok(llmStep.details.some((detail) => detail.category === "tool_output"));
   assert.ok(llmStep.details.some((detail) => detail.category === "system_prompt"));
   assert.ok(llmStep.details.some((detail) => detail.category === "user_prompt" && detail.label === "User prompts"));

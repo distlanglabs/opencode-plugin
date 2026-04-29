@@ -68,6 +68,11 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       messageRoles: new Map(),
       messageTextParts: new Map(),
       messageInteractions: new Map(),
+      interactionUserMessages: new Map(),
+      messageLLMSteps: new Map(),
+      toolStepsByCallID: new Map(),
+      lastLLMStepByInteraction: new Map(),
+      lastToolStepByInteraction: new Map(),
       toolStarts: new Map(),
       seenUserMessages: new Set(),
       contextContributors: [],
@@ -121,6 +126,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       existing.prompt = cleanPrompt;
       existing.summary = summarizePrompt(cleanPrompt, existing.summary || `Interaction ${existing.index}`);
       applyInteractionMode(existing, mode);
+      recorder.interactionUserMessages.set(existing.id, messageID);
       return existing;
     }
     const current = findInteraction(recorder, recorder.currentInteractionID);
@@ -130,6 +136,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       current.summary = summarizePrompt(cleanPrompt, `Interaction ${current.index}`);
       applyInteractionMode(current, mode);
       recorder.messageInteractions.set(messageID, current.id);
+      recorder.interactionUserMessages.set(current.id, messageID);
       recorder.seenUserMessages.add(messageID);
       return current;
     }
@@ -143,6 +150,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     recorder.seenUserMessages.add(messageID);
     const interaction = createInteraction(recorder, cleanPrompt, timestampMs, messageID, mode);
     recorder.messageInteractions.set(messageID, interaction.id);
+    recorder.interactionUserMessages.set(interaction.id, messageID);
     return interaction;
   }
 
@@ -237,7 +245,13 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       started_at: new Date().toISOString(),
       ended_at: new Date().toISOString(),
       status: "success",
-      payload_json: { file_path: filePath, language: inferLanguage(filePath) },
+      payload_json: {
+        file_path: filePath,
+        language: inferLanguage(filePath),
+        parent_tool_step_id: recorder.lastToolStepByInteraction.get(interaction.id) || undefined,
+        parent_llm_step_id: recorder.lastLLMStepByInteraction.get(interaction.id) || undefined,
+        relationship: recorder.lastToolStepByInteraction.get(interaction.id) ? "caused_by_tool" : "caused_by_model",
+      },
     });
     return { sessionID, filePath, language: inferLanguage(filePath) };
   }
@@ -328,7 +342,10 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       existing.finalized = true;
       const targetInteraction = findInteraction(recorder, existing.interactionID) || interaction;
       applyInteractionMode(targetInteraction, mode);
-      addStep(recorder, targetInteraction, {
+      const parentMessageID = parentID || recorder.interactionUserMessages.get(targetInteraction.id) || null;
+      const loopIteration = targetInteraction.steps.filter((step) => step.kind === "llm_call").length + 1;
+      const previousToolStep = findPreviousToolStep(targetInteraction, id);
+      const llmStep = addStep(recorder, targetInteraction, {
         kind: "llm_call",
         phase: targetInteraction.mode,
         title: summarizePrompt(assistantText, `Model response for Interaction ${targetInteraction.index}`),
@@ -346,9 +363,32 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
         cost_usd: finiteNumber(info && info.cost),
         first_token_at: existing.firstTokenAt != null ? new Date(existing.firstTokenAt).toISOString() : null,
         first_token_latency_ms: existing.firstTokenAt != null ? Math.max(0, existing.firstTokenAt - existing.firstSeenAt) : 0,
-        payload_json: { message_id: id },
+        payload_json: {
+          message_id: id,
+          parent_message_id: parentMessageID,
+          loop_iteration: loopIteration,
+          caused_by: previousToolStep ? {
+            type: "tool_result",
+            step_id: previousToolStep.id,
+            call_id: previousToolStep.payload_json?.call_id || null,
+          } : {
+            type: parentMessageID ? "user_prompt" : "session_start",
+            message_id: parentMessageID,
+          },
+        },
         details: buildLLMStepDetails(recorder, targetInteraction, id),
       });
+      recorder.messageLLMSteps.set(id, llmStep.id);
+      recorder.lastLLMStepByInteraction.set(targetInteraction.id, llmStep.id);
+      for (const step of targetInteraction.steps) {
+        if (step.kind !== "tool_call") continue;
+        if (step.payload_json?.message_id !== id) continue;
+        step.payload_json = {
+          ...step.payload_json,
+          parent_llm_step_id: llmStep.id,
+          relationship: "requested_by_model",
+        };
+      }
       addContextContributor(recorder, {
         category: "assistant_history",
         label: `Previous assistant response from Interaction ${targetInteraction.index}`,
@@ -383,6 +423,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       startedAt: Date.now(),
       tool: configuredValue(input && input.tool, "unknown"),
       interactionID,
+      messageID,
     });
     return { sessionID, callID, tool: configuredValue(input && input.tool, "unknown") };
   }
@@ -402,7 +443,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const mode = inferInteractionMode(input, output);
     const interaction = mappedInteractionID ? findInteraction(recorder, mappedInteractionID) || ensureInteraction(recorder, Date.now(), "", mode) : ensureInteraction(recorder, Date.now(), "", mode);
     applyInteractionMode(interaction, mode);
-    addStep(recorder, interaction, {
+    const toolStep = addStep(recorder, interaction, {
       kind: "tool_call",
       phase: interaction.mode,
       title: `Run ${configuredValue(toolState.tool, "unknown")}`,
@@ -411,8 +452,18 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       duration_ms: Math.max(0, Date.now() - toolState.startedAt),
       status: output && output.error ? "error" : "success",
       tool_name: configuredValue(toolState.tool, "unknown"),
-      payload_json: output && output.metadata && typeof output.metadata === "object" ? output.metadata : null,
+      payload_json: {
+        ...safeObject(output && output.metadata),
+        call_id: callID || null,
+        message_id: messageID || configuredValue(toolState.messageID, "") || null,
+        parent_llm_step_id: recorder.messageLLMSteps.get(messageID) || null,
+        relationship: "requested_by_model",
+      },
     });
+    if (callID) {
+      recorder.toolStepsByCallID.set(callID, toolStep.id);
+    }
+    recorder.lastToolStepByInteraction.set(interaction.id, toolStep.id);
     addContextContributor(recorder, {
       category: "tool_output",
       label: `Tool ${configuredValue(toolState.tool, "unknown")}`,
@@ -715,6 +766,20 @@ function buildInteractionPayload(interaction, sessionTitle = "") {
     step_count: interaction.steps.length,
     steps: interaction.steps,
   };
+}
+
+function findPreviousToolStep(interaction, messageID) {
+  for (let index = interaction.steps.length - 1; index >= 0; index -= 1) {
+    const step = interaction.steps[index];
+    if (step.kind !== "tool_call") continue;
+    if (messageID && step.payload_json?.message_id && step.payload_json.message_id !== messageID) continue;
+    return step;
+  }
+  return null;
+}
+
+function safeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function isGenericInteractionLabel(value) {

@@ -1,6 +1,6 @@
 {
   "name": "@distlang/opencode-plugin",
-  "version": "0.1.15",
+  "version": "0.2.0",
   "description": "OpenCode plugin for Distlang AI Debugger",
   "type": "module",
   "main": "./src/index.js",
