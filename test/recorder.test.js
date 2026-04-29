@@ -58,8 +58,12 @@ test("captures OpenCode title, token usage, context, and sanitized text", () => 
   assert.equal(llmStep.model, "gpt-5.5");
   assert.ok(llmStep.details.some((detail) => detail.category === "tool_output"));
   assert.ok(llmStep.details.some((detail) => detail.category === "system_prompt"));
+  assert.ok(llmStep.details.some((detail) => detail.category === "user_prompt" && detail.label === "User prompts"));
   const toolDetail = llmStep.details.find((detail) => detail.category === "tool_output");
+  assert.equal(toolDetail.label, "Tool outputs");
   assert.equal(toolDetail.metadata_json.top_items[0].label, "Tool read");
+  const userPromptDetail = llmStep.details.find((detail) => detail.category === "user_prompt");
+  assert.equal(userPromptDetail.metadata_json.top_items[0].label, "User prompt from Interaction 1");
 });
 
 test("uses explicit context token field when OpenCode provides it", () => {
@@ -108,6 +112,26 @@ test("uses the session title when an interaction prompt is only the generic fall
   const payload = recorder.finalizeSession("session-3", "success", Date.now());
   assert.equal(payload.interactions[0].prompt, "Explain interaction naming");
   assert.equal(payload.interactions[0].summary, "Explain interaction naming");
+});
+
+test("uses readable fallback labels when assistant text is unavailable", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-3b", info: { id: "session-3b", title: "Investigate missing content" } });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    info: {
+      id: "assistant-3b",
+      sessionID: "session-3b",
+      role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.5",
+      done: true,
+      tokens: { input: 10, output: 0 },
+    },
+  });
+
+  const payload = recorder.finalizeSession("session-3b", "success", Date.now());
+  assert.equal(payload.interactions[0].steps[0].title, "Model response for Interaction 1");
 });
 
 test("extracts nested OpenCode session titles", () => {
@@ -298,6 +322,10 @@ test("uses OpenCode message lineage for stable multi-interaction sessions", () =
   assert.equal(payload.interactions[0].steps[0].title, "First answer");
   assert.equal(payload.interactions[1].steps.length, 2);
   assert.deepEqual(payload.interactions[1].steps.map((step) => step.kind).sort(), ["llm_call", "tool_call"]);
+  const secondLLMStep = payload.interactions[1].steps.find((step) => step.kind === "llm_call");
+  const previousResponses = secondLLMStep.details.find((detail) => detail.category === "assistant_history");
+  assert.equal(previousResponses.label, "Previous assistant messages");
+  assert.equal(previousResponses.metadata_json.top_items[0].label, "Previous assistant response from Interaction 1");
 });
 
 test("snapshot preserves at least ten prompt interactions", () => {

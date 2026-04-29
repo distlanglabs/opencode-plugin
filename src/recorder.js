@@ -259,7 +259,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
     const interaction = observeUserPrompt(recorder, id, prompt, parseMessageTime(info, Date.now()), mode);
     addContextContributor(recorder, {
       category: "user_prompt",
-      label: `User prompt ${interaction.index}`,
+      label: `User prompt from Interaction ${interaction.index}`,
       source: "opencode.message",
       text: prompt,
     });
@@ -331,7 +331,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       addStep(recorder, targetInteraction, {
         kind: "llm_call",
         phase: targetInteraction.mode,
-        title: summarizePrompt(assistantText, `Assistant response ${targetInteraction.index}`),
+        title: summarizePrompt(assistantText, `Model response for Interaction ${targetInteraction.index}`),
         started_at: new Date(existing.firstSeenAt).toISOString(),
         ended_at: new Date(now).toISOString(),
         duration_ms: Math.max(0, now - existing.firstSeenAt),
@@ -351,7 +351,7 @@ export function createRecorder({ project, directory, initialPrompt = "" }) {
       });
       addContextContributor(recorder, {
         category: "assistant_history",
-        label: `Assistant response ${targetInteraction.index}`,
+        label: `Previous assistant response from Interaction ${targetInteraction.index}`,
         source: "opencode.message",
         text: assistantText,
       });
@@ -598,7 +598,20 @@ function estimateTokens(text) {
 }
 
 function detailCategoryLabel(category) {
-  return String(category || "unknown").split("_").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
+  const labels = {
+    assistant_history: "Previous assistant messages",
+    file_context: "File/context snippets",
+    instructions: "Instructions",
+    system_event: "System event",
+    system_prompt: "System prompt",
+    tool_call: "Tool call",
+    tool_output: "Tool outputs",
+    user_prompt: "User prompts",
+    llm_call: "Model call",
+    file_edit: "File edit",
+  };
+  const normalized = String(category || "unknown");
+  return labels[normalized] || normalized.split("_").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
 }
 
 function safeDetailLabel(value, fallback) {
