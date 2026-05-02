@@ -1,6 +1,6 @@
 import { createRecorder, extractSessionTitle } from "./recorder.js";
 import { extractDistlangInvocation } from "./command.js";
-import { distlangCommandInfo, fetchAIDebuggerSessions, getAuthStatus, loginWithDistlang, resolveDistlangBinary, uploadAIDebuggerPayload } from "./distlang.js";
+import { distlangCommandInfo, fetchAIDebuggerSessions, getAuthStatus, loginWithDistlang, logoutWithDistlang, resolveDistlangBinary, uploadAIDebuggerPayload } from "./distlang.js";
 import { pluginStatePath, readPluginState, writePluginState } from "./state.js";
 import { appendFile } from "node:fs/promises";
 
@@ -131,7 +131,14 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 
     if (action === "stop") {
       const state = await writePluginState(false);
-      await maybeLogCommandResult("info", "Distlang AI Debugger uploads disabled", { source, action, state });
+      authWarningLogged = false;
+      try {
+        const resolved = await resolveDistlangBinary({ installIfMissing: true });
+        await logoutWithDistlang();
+        await maybeLogCommandResult("info", "Distlang AI Debugger uploads disabled and signed out", { source, action, state, distlang: resolved });
+      } catch (error) {
+        await maybeLogCommandResult("warn", "Distlang AI Debugger uploads disabled, but sign out failed", { source, action, state, error: String(error) });
+      }
       return;
     }
 

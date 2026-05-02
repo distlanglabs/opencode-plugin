@@ -78,8 +78,8 @@ description: Manage Distlang AI Debugger uploads
 The plugin watches for this command and handles:
 
 - `/distlang status`
-- `/distlang start`
-- `/distlang stop`
+- `/distlang start`: sign in if needed and enable AI Debugger uploads
+- `/distlang stop`: disable AI Debugger uploads and sign out of Distlang
 
 Command results are written to the OpenCode app log, and also to the debug log file when enabled.
 
