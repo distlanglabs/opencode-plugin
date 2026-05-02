@@ -96,7 +96,16 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       return;
     }
     commandHandledAt = now;
-    const action = configuredValue(invocation.args[0], "status").toLowerCase();
+    const requestedAction = configuredValue(invocation.args[0], "status").toLowerCase();
+    const action = requestedAction === "login" ? "start" : requestedAction === "logout" ? "stop" : requestedAction;
+    if (!["status", "start", "stop"].includes(action)) {
+      await maybeLogCommandResult("warn", "Unknown Distlang command. Use /distlang status, /distlang start, or /distlang stop", {
+        source,
+        action: requestedAction,
+        command_hint: "/distlang status | /distlang start | /distlang stop",
+      });
+      return;
+    }
     if (action === "start") {
       const state = await writePluginState(true);
       authWarningLogged = false;
