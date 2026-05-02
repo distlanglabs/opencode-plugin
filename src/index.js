@@ -171,7 +171,10 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       await debugLog("Distlang auth status resolved", { authAvailable, payload, distlang: resolved });
       if (!authAvailable && !authWarningLogged) {
         authWarningLogged = true;
-        await log("warn", "Distlang AI Debugger upload disabled: run `distlang helpers login` first", { auth: payload });
+        await maybeLogCommandResult("warn", "Distlang AI Debugger upload disabled: run `/distlang start` to sign in and enable uploads", {
+          auth: payload,
+          command_hint: "/distlang start",
+        });
       } else if (authAvailable) {
         authWarningLogged = false;
       }
