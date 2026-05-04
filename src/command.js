@@ -60,14 +60,31 @@ export function extractDistlangInvocation(input) {
   ];
   for (const candidate of candidates) {
     const parsed = commandLike(candidate);
-    if (parsed && parsed.name === "distlang") {
-      return parsed;
+    const invocation = distlangInvocation(parsed);
+    if (invocation) {
+      return invocation;
     }
   }
 
   const directText = splitCommandText(configuredValue(input?.commandLine, configuredValue(input?.text, configuredValue(input?.input, configuredValue(input?.raw, "")))));
-  if (directText && directText.name === "distlang") {
-    return directText;
+  return distlangInvocation(directText);
+}
+
+function distlangInvocation(parsed) {
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.name === "distlang") {
+    return parsed;
+  }
+  const action = parsed.name.startsWith("distlang-") ? parsed.name.slice("distlang-".length) : "";
+  if (action === "start" || action === "stop" || action === "status") {
+    return {
+      ...parsed,
+      name: "distlang",
+      action,
+      raw: parsed.raw || `/${parsed.name}`,
+    };
   }
   return null;
 }

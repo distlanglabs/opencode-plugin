@@ -96,13 +96,13 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       return;
     }
     commandHandledAt = now;
-    const requestedAction = configuredValue(invocation.args[0], "status").toLowerCase();
+    const requestedAction = configuredValue(invocation.action, configuredValue(invocation.args[0], "status")).toLowerCase();
     const action = requestedAction === "login" ? "start" : requestedAction === "logout" ? "stop" : requestedAction;
     if (!["status", "start", "stop"].includes(action)) {
-      await maybeLogCommandResult("warn", "Unknown Distlang command. Use /distlang status, /distlang start, or /distlang stop", {
+      await maybeLogCommandResult("warn", "Unknown Distlang command. Use /distlang-status, /distlang-start, or /distlang-stop", {
         source,
         action: requestedAction,
-        command_hint: "/distlang status | /distlang start | /distlang stop",
+        command_hint: "/distlang-status | /distlang-start | /distlang-stop",
       });
       return;
     }
@@ -171,7 +171,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       auth,
       sessions,
       error: resolutionError,
-      command_hint: "/distlang status | /distlang start | /distlang stop",
+      command_hint: "/distlang-status | /distlang-start | /distlang-stop",
     });
   }
 
@@ -187,9 +187,9 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       await debugLog("Distlang auth status resolved", { authAvailable, payload, distlang: resolved });
       if (!authAvailable && !authWarningLogged) {
         authWarningLogged = true;
-        await maybeLogCommandResult("warn", "Distlang AI Debugger upload disabled: run `/distlang start` to sign in and enable uploads", {
+        await maybeLogCommandResult("warn", "Distlang AI Debugger upload disabled: run `/distlang-start` to sign in and enable uploads", {
           auth: payload,
-          command_hint: "/distlang start",
+          command_hint: "/distlang-start",
         });
       } else if (authAvailable) {
         authWarningLogged = false;

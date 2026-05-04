@@ -63,19 +63,41 @@ The plugin uses:
 
 If you are not logged in, the plugin logs one warning and continues without uploading.
 
-## `/distlang` command
+## Distlang commands
 
-OpenCode commands are configured separately from plugins, so add a command file to make `/distlang` available in the TUI:
+OpenCode commands are configured separately from plugins, so add command files to make the Distlang controls available in the TUI:
 
-`~/.config/opencode/commands/distlang.md`
+`~/.config/opencode/commands/distlang-start.md`
 
 ```md
 ---
-description: Manage Distlang AI Debugger uploads
+description: Sign in and enable Distlang AI Debugger uploads
 ---
 ```
 
-The plugin watches for this command and handles:
+`~/.config/opencode/commands/distlang-stop.md`
+
+```md
+---
+description: Disable Distlang AI Debugger uploads and sign out
+---
+```
+
+`~/.config/opencode/commands/distlang-status.md`
+
+```md
+---
+description: Show Distlang AI Debugger upload status
+---
+```
+
+The plugin watches for these commands:
+
+- `/distlang-start`
+- `/distlang-stop`
+- `/distlang-status`
+
+The legacy compact command also remains supported:
 
 - `/distlang status`
 - `/distlang start`
@@ -85,24 +107,24 @@ The plugin watches for this command and handles:
 
 Command results are written to the OpenCode app log, and also to the debug log file when enabled.
 
-If `/distlang start` finds that Distlang auth is missing, the plugin starts `distlang helpers login`, which opens the browser login flow.
+If `/distlang-start` finds that Distlang auth is missing, the plugin starts `distlang helpers login`, which opens the browser login flow.
 
 ### Command usage
 
 Run these inside the OpenCode TUI:
 
 ```text
-/distlang start
-/distlang status
+/distlang-start
+/distlang-status
 ```
 
-Subcommands:
+Commands:
 
-- `/distlang status`: show whether uploads are enabled, whether auth is available, and whether recent AI Debugger sessions are visible
-- `/distlang start` or `/distlang login`: sign in if needed and enable AI Debugger uploads
-- `/distlang stop` or `/distlang logout`: disable AI Debugger uploads and sign out of Distlang
+- `/distlang-status`: show whether uploads are enabled, whether auth is available, and whether recent AI Debugger sessions are visible
+- `/distlang-start`: sign in if needed and enable AI Debugger uploads
+- `/distlang-stop`: disable AI Debugger uploads and sign out of Distlang
 
-Unknown subcommands show the supported command list instead of changing upload state.
+Legacy aliases remain available: `/distlang status`, `/distlang start`, `/distlang stop`, `/distlang login`, and `/distlang logout`.
 
 ## Debugging
 
