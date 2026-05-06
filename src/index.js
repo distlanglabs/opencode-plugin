@@ -1,6 +1,6 @@
 import { createRecorder, extractSessionTitle } from "./recorder.js";
 import { extractDistlangInvocation } from "./command.js";
-import { distlangCommandInfo, fetchAIDebuggerSessions, getAuthStatus, loginWithDistlang, logoutWithDistlang, resolveDistlangBinary, uploadAIDebuggerPayload } from "./distlang.js";
+import { distlangCommandInfo, fetchAgentDebuggerSessions, getAuthStatus, loginWithDistlang, logoutWithDistlang, resolveDistlangBinary, uploadAgentDebuggerPayload } from "./distlang.js";
 import { pluginStatePath, readPluginState, writePluginState } from "./state.js";
 import { appendFile } from "node:fs/promises";
 
@@ -17,7 +17,7 @@ function debugLogFile() {
   return configuredValue(process.env.DISTLANG_OPENCODE_LOG_FILE, "");
 }
 
-export const DistlangAIDebugger = async ({ project, directory, client }) => {
+export const DistlangAgentDebugger = async ({ project, directory, client }) => {
   const debug = debugEnabled();
   const recorder = createRecorder({ project, directory, initialPrompt: extractOpenCodeRunPrompt(process.argv) });
   let loggedInit = false;
@@ -28,7 +28,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   async function log(level, message, extra = undefined) {
     const line = JSON.stringify({
       ts: new Date().toISOString(),
-      service: "distlang-ai-debugger",
+      service: "distlang-agent-debugger",
       level,
       message,
       extra,
@@ -42,7 +42,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     }
     await client.app.log({
       body: {
-        service: "distlang-ai-debugger",
+        service: "distlang-agent-debugger",
         level,
         message,
         extra,
@@ -62,7 +62,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       return;
     }
     loggedInit = true;
-    await log(debug ? "debug" : "info", "Distlang OpenCode AI Debugger plugin initialized", {
+    await log(debug ? "debug" : "info", "Distlang OpenCode Agent Debugger plugin initialized", {
       debug,
       statePath: pluginStatePath(),
       distlang: distlangCommandInfo(),
@@ -128,7 +128,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
         await maybeLogCommandResult("warn", "Distlang uploads enabled, but auth check failed", { source, action, state, distlang: resolved, error: String(error) });
         return;
       }
-      await maybeLogCommandResult("info", "Distlang AI Debugger uploads enabled", {
+      await maybeLogCommandResult("info", "Distlang Agent Debugger uploads enabled", {
         source,
         action,
         state,
@@ -144,9 +144,9 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       try {
         const resolved = await resolveDistlangBinary({ installIfMissing: true });
         await logoutWithDistlang();
-        await maybeLogCommandResult("info", "Distlang AI Debugger uploads disabled and signed out", { source, action, state, distlang: resolved });
+        await maybeLogCommandResult("info", "Distlang Agent Debugger uploads disabled and signed out", { source, action, state, distlang: resolved });
       } catch (error) {
-        await maybeLogCommandResult("warn", "Distlang AI Debugger uploads disabled, but sign out failed", { source, action, state, error: String(error) });
+        await maybeLogCommandResult("warn", "Distlang Agent Debugger uploads disabled, but sign out failed", { source, action, state, error: String(error) });
       }
       return;
     }
@@ -159,11 +159,11 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
     try {
       resolved = await resolveDistlangBinary({ installIfMissing: true });
       auth = await getAuthStatus();
-      sessions = await fetchAIDebuggerSessions();
+      sessions = await fetchAgentDebuggerSessions();
     } catch (error) {
       resolutionError = String(error);
     }
-    await maybeLogCommandResult("info", "Distlang AI Debugger status", {
+    await maybeLogCommandResult("info", "Distlang Agent Debugger status", {
       source,
       action,
       state,
@@ -177,7 +177,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
 
   async function ensureAuthStatus() {
     if (!(await uploadEnabled())) {
-      await debugLog("Distlang AI Debugger uploads are disabled", { state: await readPluginState() });
+      await debugLog("Distlang Agent Debugger uploads are disabled", { state: await readPluginState() });
       return false;
     }
     try {
@@ -187,7 +187,7 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       await debugLog("Distlang auth status resolved", { authAvailable, payload, distlang: resolved });
       if (!authAvailable && !authWarningLogged) {
         authWarningLogged = true;
-        await maybeLogCommandResult("warn", "Distlang AI Debugger upload disabled: run `/distlang-start` to sign in and enable uploads", {
+        await maybeLogCommandResult("warn", "Distlang Agent Debugger upload disabled: run `/distlang-start` to sign in and enable uploads", {
           auth: payload,
           command_hint: "/distlang-start",
         });
@@ -199,11 +199,11 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       if (error && typeof error === "object" && error.code === "ENOENT") {
         if (!distlangMissingLogged) {
           distlangMissingLogged = true;
-          await log("warn", "distlang CLI not found; AI Debugger upload disabled", { distlang: distlangCommandInfo() });
+          await log("warn", "distlang CLI not found; Agent Debugger upload disabled", { distlang: distlangCommandInfo() });
         }
       } else if (!authWarningLogged) {
         authWarningLogged = true;
-        await log("warn", "Distlang AI Debugger auth check failed; upload disabled", { error: String(error) });
+        await log("warn", "Distlang Agent Debugger auth check failed; upload disabled", { error: String(error) });
       }
       return false;
     }
@@ -215,14 +215,14 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       await refreshSessionMetadata(sessionID, { retry: true });
       payload = recorder.finalizeSession(sessionID, result, Date.now());
     } catch (error) {
-      await log("error", "AI Debugger session finalization failed", { sessionID, result, error: String(error) });
+      await log("error", "Agent Debugger session finalization failed", { sessionID, result, error: String(error) });
       return;
     }
     if (!payload) {
       await debugLog("No payload produced during session finalization", { sessionID, result });
       return;
     }
-    await debugLog("Finalized AI Debugger session payload", {
+    await debugLog("Finalized Agent Debugger session payload", {
       sessionID,
       result,
       interactions: Array.isArray(payload.interactions) ? payload.interactions.length : 0,
@@ -234,15 +234,15 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       return;
     }
     try {
-      const response = await uploadAIDebuggerPayload(payload);
-      await debugLog("AI Debugger upload response received", { sessionID, response });
+      const response = await uploadAgentDebuggerPayload(payload);
+      await debugLog("Agent Debugger upload response received", { sessionID, response });
       if (!response.ok) {
-        await log("warn", "AI Debugger upload failed", { sessionID, response });
+        await log("warn", "Agent Debugger upload failed", { sessionID, response });
         return;
       }
-      await debugLog("AI Debugger session uploaded", { sessionID, response });
+      await debugLog("Agent Debugger session uploaded", { sessionID, response });
     } catch (error) {
-      await log("warn", "AI Debugger upload failed", { sessionID, error: String(error) });
+      await log("warn", "Agent Debugger upload failed", { sessionID, error: String(error) });
     }
   }
 
@@ -252,14 +252,14 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       await refreshSessionMetadata(sessionID, { retry: true });
       payload = recorder.snapshotSession(sessionID, result, Date.now());
     } catch (error) {
-      await log("error", "AI Debugger session snapshot failed", { sessionID, result, error: String(error) });
+      await log("error", "Agent Debugger session snapshot failed", { sessionID, result, error: String(error) });
       return;
     }
     if (!payload) {
       await debugLog("No payload produced during session snapshot", { sessionID, result });
       return;
     }
-    await debugLog("Prepared AI Debugger session snapshot", {
+    await debugLog("Prepared Agent Debugger session snapshot", {
       sessionID,
       result,
       interactions: Array.isArray(payload.interactions) ? payload.interactions.length : 0,
@@ -271,15 +271,15 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
       return;
     }
     try {
-      const response = await uploadAIDebuggerPayload(payload);
-      await debugLog("AI Debugger snapshot upload response received", { sessionID, response });
+      const response = await uploadAgentDebuggerPayload(payload);
+      await debugLog("Agent Debugger snapshot upload response received", { sessionID, response });
       if (!response.ok) {
-        await log("warn", "AI Debugger snapshot upload failed", { sessionID, response });
+        await log("warn", "Agent Debugger snapshot upload failed", { sessionID, response });
         return;
       }
-      await debugLog("AI Debugger session snapshot uploaded", { sessionID, response });
+      await debugLog("Agent Debugger session snapshot uploaded", { sessionID, response });
     } catch (error) {
-      await log("warn", "AI Debugger snapshot upload failed", { sessionID, error: String(error) });
+      await log("warn", "Agent Debugger snapshot upload failed", { sessionID, error: String(error) });
     }
   }
 
@@ -488,4 +488,4 @@ export const DistlangAIDebugger = async ({ project, directory, client }) => {
   };
 };
 
-export default DistlangAIDebugger;
+export default DistlangAgentDebugger;

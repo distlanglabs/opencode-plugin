@@ -185,15 +185,15 @@ export async function logoutWithDistlang() {
   return runDistlang(["helpers", "logout"]);
 }
 
-export async function uploadAIDebuggerPayload(payload) {
-  const tempFile = join(tmpdir(), `distlang-ai-debugger-${randomUUID()}.json`);
+export async function uploadAgentDebuggerPayload(payload) {
+  const tempFile = join(tmpdir(), `distlang-agent-debugger-${randomUUID()}.json`);
   await fs.writeFile(tempFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   try {
     const { stdout } = await runDistlang([
       "helpers",
       "request",
       "POST",
-      "/ai-debugger/v1/ingest",
+      "/agent-debugger/v1/ingest",
       `--body-file=${tempFile}`,
       "--content-type=application/json",
       "--json",
@@ -204,12 +204,12 @@ export async function uploadAIDebuggerPayload(payload) {
   }
 }
 
-export async function fetchAIDebuggerSessions() {
+export async function fetchAgentDebuggerSessions() {
   const { stdout } = await runDistlang([
     "helpers",
     "request",
     "GET",
-    "/ai-debugger/v1/sessions?source=opencode&limit=5",
+    "/agent-debugger/v1/sessions?source=opencode&limit=5",
     "--json",
   ]);
   return JSON.parse(stdout || "{}");

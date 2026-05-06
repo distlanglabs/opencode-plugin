@@ -1,7 +1,7 @@
 {
   "name": "@distlang/opencode-plugin",
-  "version": "0.2.1",
-  "description": "OpenCode plugin for Distlang AI Debugger",
+  "version": "0.2.2",
+  "description": "OpenCode plugin for Distlang Agent Debugger",
   "type": "module",
   "main": "./src/index.js",
   "exports": {
@@ -25,7 +25,7 @@
     "distlang",
     "opencode",
     "plugin",
-    "ai-debugger"
+    "agent-debugger"
   ],
   "repository": {
     "type": "git",

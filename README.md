@@ -1,6 +1,6 @@
 # @distlang/opencode-plugin
 
-OpenCode plugin for capturing coding sessions and uploading them to Distlang AI Debugger.
+OpenCode plugin for capturing coding sessions and uploading them to Distlang Agent Debugger.
 
 ## Install
 
@@ -59,7 +59,7 @@ If the plugin installs a managed copy because `distlang` was missing, you can lo
 The plugin uses:
 
 - `distlang helpers auth status --json`
-- `distlang helpers request POST /ai-debugger/v1/ingest ...`
+- `distlang helpers request POST /agent-debugger/v1/ingest ...`
 
 If you are not logged in, the plugin logs one warning and continues without uploading.
 
@@ -71,7 +71,7 @@ OpenCode commands are configured separately from plugins, so add command files t
 
 ```md
 ---
-description: Sign in and enable Distlang AI Debugger uploads
+description: Sign in and enable Distlang Agent Debugger uploads
 ---
 ```
 
@@ -79,7 +79,7 @@ description: Sign in and enable Distlang AI Debugger uploads
 
 ```md
 ---
-description: Disable Distlang AI Debugger uploads and sign out
+description: Disable Distlang Agent Debugger uploads and sign out
 ---
 ```
 
@@ -87,7 +87,7 @@ description: Disable Distlang AI Debugger uploads and sign out
 
 ```md
 ---
-description: Show Distlang AI Debugger upload status
+description: Show Distlang Agent Debugger upload status
 ---
 ```
 
@@ -120,9 +120,9 @@ Run these inside the OpenCode TUI:
 
 Commands:
 
-- `/distlang-status`: show whether uploads are enabled, whether auth is available, and whether recent AI Debugger sessions are visible
-- `/distlang-start`: sign in if needed and enable AI Debugger uploads
-- `/distlang-stop`: disable AI Debugger uploads and sign out of Distlang
+- `/distlang-status`: show whether uploads are enabled, whether auth is available, and whether recent Agent Debugger sessions are visible
+- `/distlang-start`: sign in if needed and enable Agent Debugger uploads
+- `/distlang-stop`: disable Agent Debugger uploads and sign out of Distlang
 
 Legacy aliases remain available: `/distlang status`, `/distlang start`, `/distlang stop`, `/distlang login`, and `/distlang logout`.
 
@@ -147,12 +147,12 @@ DISTLANG_OPENCODE_LOG_FILE=/tmp/distlang-opencode.log opencode
 To inspect whether uploads are visible after a run:
 
 ```bash
-distlang helpers request GET /ai-debugger/v1/sessions --json
+distlang helpers request GET /agent-debugger/v1/sessions --json
 ```
 
 ## Captured Model
 
-The plugin builds a session-batch payload for Distlang AI Debugger:
+The plugin builds a session-batch payload for Distlang Agent Debugger:
 
 - `session`
 - `interaction`
@@ -185,8 +185,8 @@ If `--model` and `OPENCODE_MODEL` are omitted, the harness defaults to `openai/g
 
 Useful flags:
 
-- `--require-upload` fails unless Distlang auth is available and the uploaded AI Debugger session validates.
-- `--keep-session` keeps the uploaded AI Debugger session for dashboard inspection.
+- `--require-upload` fails unless Distlang auth is available and the uploaded Agent Debugger session validates.
+- `--keep-session` keeps the uploaded Agent Debugger session for dashboard inspection.
 - `--keep-temp` keeps temporary logs and fixtures for debugging. Do not commit those files.
 - `--verbose` prints redacted command output.
 

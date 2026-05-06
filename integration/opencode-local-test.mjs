@@ -36,7 +36,7 @@ try {
   await mkdir(pluginsDir, { recursive: true });
   await writeFile(join(projectDir, "README.md"), "# Distlang OpenCode integration fixture\n", "utf8");
   await writeFile(join(configDir, "opencode.json"), "{\n  \"$schema\": \"https://opencode.ai/config.json\"\n}\n", "utf8");
-  await writeFile(join(pluginsDir, "distlang-local.mjs"), `export { default, DistlangAIDebugger } from ${JSON.stringify(pathToFileURL(join(repoRoot, "src", "index.js")).href)};\n`, "utf8");
+  await writeFile(join(pluginsDir, "distlang-local.mjs"), `export { default, DistlangAgentDebugger } from ${JSON.stringify(pathToFileURL(join(repoRoot, "src", "index.js")).href)};\n`, "utf8");
 
   runCommand("git", ["init", "-b", "main"], { cwd: projectDir, verbose: opts.verbose });
 
@@ -62,7 +62,7 @@ try {
   runCommand(opencodePath, args, { cwd: projectDir, env, verbose: opts.verbose, redact: true });
 
   const pluginLog = await safeRead(pluginLogPath);
-  assertIncludes(pluginLog, "Distlang OpenCode AI Debugger plugin initialized", "plugin did not initialize");
+  assertIncludes(pluginLog, "Distlang OpenCode Agent Debugger plugin initialized", "plugin did not initialize");
   assertIncludes(pluginLog, "message.part.updated observed", "plugin did not observe OpenCode text parts");
   assertIncludes(pluginLog, "assistant message update observed", "plugin did not observe assistant message updates");
   assertIncludes(pluginLog, "tool.execute.after observed", "plugin did not observe tool execution steps");
@@ -101,7 +101,7 @@ try {
   if (uploadedSessionID && !opts.keepSession) {
     const distlangPath = findDistlangCommand();
     if (distlangPath) {
-      distlangRequest(distlangPath, "DELETE", `/ai-debugger/v1/sessions/${encodeURIComponent(uploadedSessionID)}`, opts.verbose);
+      distlangRequest(distlangPath, "DELETE", `/agent-debugger/v1/sessions/${encodeURIComponent(uploadedSessionID)}`, opts.verbose);
       info(`deleted uploaded session ${uploadedSessionID}`);
     }
   }
@@ -195,20 +195,20 @@ function distlangRequest(distlangPath, method, path, verbose) {
 async function pollUploadedSession({ distlangPath, project, targetFile, startedAt, verbose }) {
   const deadline = Date.now() + 65000;
   while (Date.now() < deadline) {
-    const list = distlangRequest(distlangPath, "GET", `/ai-debugger/v1/sessions?source=opencode&project=${encodeURIComponent(project)}&limit=10`, verbose);
+    const list = distlangRequest(distlangPath, "GET", `/agent-debugger/v1/sessions?source=opencode&project=${encodeURIComponent(project)}&limit=10`, verbose);
     for (const session of list.sessions || []) {
       const started = Date.parse(session.started_at || "");
       if (Number.isFinite(started) && started < startedAt) {
         continue;
       }
-      const detail = distlangRequest(distlangPath, "GET", `/ai-debugger/v1/sessions/${encodeURIComponent(session.id)}`, verbose);
+      const detail = distlangRequest(distlangPath, "GET", `/agent-debugger/v1/sessions/${encodeURIComponent(session.id)}`, verbose);
       if (JSON.stringify(detail).includes(targetFile)) {
         return detail;
       }
     }
     await sleep(2000);
   }
-  fail(`uploaded AI Debugger session containing ${targetFile} did not appear before timeout`);
+  fail(`uploaded Agent Debugger session containing ${targetFile} did not appear before timeout`);
 }
 
 function assertUploadedPrompt(detail, targetFile) {
