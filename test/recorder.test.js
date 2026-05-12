@@ -100,6 +100,40 @@ test("uses explicit context token field when OpenCode provides it", () => {
   assert.equal(payload.session.context_size_tokens_max, 999);
 });
 
+test("captures OpenCode nested cache read tokens", () => {
+  const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
+  recorder.observeSessionCreated({ type: "session.created", sessionID: "session-cache", info: { id: "session-cache" } });
+  recorder.observeUserMessage({ type: "message.updated", info: { id: "user-cache", sessionID: "session-cache", role: "user", content: "check cache" } });
+  recorder.observeAssistantMessage({
+    type: "message.updated",
+    info: {
+      id: "assistant-cache",
+      sessionID: "session-cache",
+      role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.5",
+      status: "completed",
+      content: "Cache checked",
+      tokens: {
+        input: 1000,
+        output: 300,
+        reasoning: 50,
+        cache: { read: 2500, write: 0 },
+      },
+    },
+  });
+
+  const payload = recorder.finalizeSession("session-cache", "success", Date.now());
+  const llmStep = payload.interactions[0].steps.find((step) => step.kind === "llm_call");
+  assert.ok(llmStep);
+  assert.equal(llmStep.input_tokens, 3500);
+  assert.equal(llmStep.cached_tokens, 2500);
+  assert.equal(llmStep.context_size_tokens, 3550);
+  assert.equal(payload.session.input_tokens, 3500);
+  assert.equal(payload.session.cached_tokens, 2500);
+  assert.equal(payload.session.context_size_tokens_p95, 3550);
+});
+
 test("uses the session title when an interaction prompt is only the generic fallback", () => {
   const recorder = createRecorder({ project: { name: "fixture" }, directory: "/tmp/fixture" });
   recorder.observeSessionCreated({

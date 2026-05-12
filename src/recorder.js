@@ -947,8 +947,13 @@ function assistantFinalState(info) {
 
 function tokensFromMessage(info) {
   const sources = tokenSources(info);
-  const cacheValue = firstNumber(sources, ["cache", "cached", "cached_tokens", "cachedTokens", "cacheReadInputTokens", "cachedInput", "cachedInputTokens"]);
-  const input = firstNumber(sources, ["input", "input_tokens", "inputTokens", "prompt", "prompt_tokens", "promptTokens"]);
+  const nestedCacheRead = firstNestedNumber(sources, ["cache", "read"]);
+  const nestedCacheWrite = firstNestedNumber(sources, ["cache", "write"]);
+  const flatCacheRead = firstNumber(sources, ["cached", "cached_tokens", "cachedTokens", "cacheReadInputTokens", "cachedInput", "cachedInputTokens"]);
+  const cacheRead = nestedCacheRead || flatCacheRead;
+  const cacheWrite = nestedCacheWrite;
+  const rawInput = firstNumber(sources, ["input", "input_tokens", "inputTokens", "prompt", "prompt_tokens", "promptTokens"]);
+  const input = rawInput + (nestedCacheRead > 0 || nestedCacheWrite > 0 ? cacheRead + cacheWrite : 0);
   const output = firstNumber(sources, ["output", "output_tokens", "outputTokens", "completion", "completion_tokens", "completionTokens"]);
   const reasoning = firstNumber(sources, ["reasoning", "reasoning_tokens", "reasoningTokens"]);
   const explicitContext = firstNumber(sources, ["context", "context_tokens", "contextTokens", "context_size", "contextSize", "context_size_tokens", "contextSizeTokens"]);
@@ -956,8 +961,8 @@ function tokensFromMessage(info) {
     input,
     output,
     reasoning,
-    cached: cacheValue,
-    context: explicitContext > 0 ? explicitContext : input + cacheValue + reasoning,
+    cached: cacheRead,
+    context: explicitContext > 0 ? explicitContext : rawInput + cacheRead + cacheWrite + reasoning,
   };
 }
 
@@ -990,6 +995,23 @@ function firstNumber(sources, keys) {
       if (parsed > 0) {
         return parsed;
       }
+    }
+  }
+  return 0;
+}
+
+function firstNestedNumber(sources, path) {
+  for (const source of sources) {
+    let value = source;
+    for (const key of path) {
+      value = value && typeof value === "object" ? value[key] : undefined;
+      if (typeof value === "undefined" || value === null) {
+        break;
+      }
+    }
+    const parsed = finiteNumber(value);
+    if (parsed > 0) {
+      return parsed;
     }
   }
   return 0;
