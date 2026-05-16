@@ -1,6 +1,6 @@
 {
   "name": "@distlang/opencode-plugin",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "OpenCode plugin for Distlang Agent Debugger",
   "type": "module",
   "main": "./src/index.js",
