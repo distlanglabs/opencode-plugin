@@ -100,6 +100,10 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
     return id ? `${dashboardBaseUrl()}/agent-debugger/sessions/${encodeURIComponent(id)}` : "";
   }
 
+  function agentDebuggerUrl() {
+    return `${dashboardBaseUrl()}/agent-debugger`;
+  }
+
   function openerCommand() {
     if (process.platform === "darwin") return { command: "open", args: [] };
     if (process.platform === "win32") return { command: "cmd", args: ["/c", "start", ""] };
@@ -231,20 +235,23 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
         return;
       }
       const sessionID = commandArgument(invocation, action) || firstSessionID(sessions);
-      const url = sessionUrl(sessionID);
-      if (!url) {
-        await maybeLogCommandResult("warn", "No uploaded OpenCode Agent Debugger session found yet", {
+      const url = sessionID ? sessionUrl(sessionID) : agentDebuggerUrl();
+      const opened = await openUrl(url);
+      if (!sessionID) {
+        await maybeLogCommandResult("info", `Open Distlang Agent Debugger: ${url}`, {
           source,
           action,
           state,
           distlang: resolved,
           auth,
+          session_id: null,
+          url,
+          opened,
+          fallback: "agent_debugger_overview",
           sessions,
-          command_hint: "Run a prompt first, wait for upload, then run /distlang-view again",
         });
         return;
       }
-      const opened = await openUrl(url);
       await maybeLogCommandResult("info", `Open Distlang Agent Debugger session: ${url}`, {
         source,
         action,
