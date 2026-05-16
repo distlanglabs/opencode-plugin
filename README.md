@@ -96,6 +96,7 @@ The plugin watches for these commands:
 - `/distlang-start`
 - `/distlang-stop`
 - `/distlang-status`
+- `/distlang-view [session-id]`
 
 The legacy compact command also remains supported:
 
@@ -123,6 +124,7 @@ Commands:
 - `/distlang-status`: show whether uploads are enabled, whether auth is available, and whether recent Agent Debugger sessions are visible
 - `/distlang-start`: sign in if needed and enable Agent Debugger uploads
 - `/distlang-stop`: disable Agent Debugger uploads and sign out of Distlang
+- `/distlang-view [session-id]`: open the latest uploaded OpenCode Agent Debugger session in the browser, or the provided session id
 
 Legacy aliases remain available: `/distlang status`, `/distlang start`, `/distlang stop`, `/distlang login`, and `/distlang logout`.
 

@@ -3,6 +3,7 @@ import { extractDistlangInvocation } from "./command.js";
 import { distlangCommandInfo, fetchAgentDebuggerSessions, getAuthStatus, loginWithDistlang, logoutWithDistlang, resolveDistlangBinary, uploadAgentDebuggerPayload } from "./distlang.js";
 import { pluginStatePath, readPluginState, writePluginState } from "./state.js";
 import { appendFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 
 function configuredValue(value, fallback = "") {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
@@ -90,6 +91,76 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
     }
   }
 
+  function dashboardBaseUrl() {
+    return configuredValue(process.env.DISTLANG_DASHBOARD_URL, "https://dash.distlang.com").replace(/\/+$/, "");
+  }
+
+  function sessionUrl(sessionID) {
+    const id = configuredValue(sessionID, "");
+    return id ? `${dashboardBaseUrl()}/agent-debugger/sessions/${encodeURIComponent(id)}` : "";
+  }
+
+  function openerCommand() {
+    if (process.platform === "darwin") return { command: "open", args: [] };
+    if (process.platform === "win32") return { command: "cmd", args: ["/c", "start", ""] };
+    return { command: "xdg-open", args: [] };
+  }
+
+  function openUrl(url) {
+    const { command, args } = openerCommand();
+    return new Promise((resolve) => {
+      try {
+        const child = spawn(command, [...args, url], { detached: true, stdio: "ignore" });
+        child.on("error", () => resolve(false));
+        child.unref();
+        resolve(true);
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  function commandArgument(invocation, action) {
+    const args = Array.isArray(invocation?.args) ? invocation.args : [];
+    if (configuredValue(invocation?.action, "")) {
+      return configuredValue(args[0], "");
+    }
+    return configuredValue(args[0], "").toLowerCase() === action ? configuredValue(args[1], "") : configuredValue(args[0], "");
+  }
+
+  function sessionsFromResponse(response) {
+    const candidates = [
+      response?.body?.sessions,
+      response?.sessions,
+      response?.body?.data?.sessions,
+      response?.data?.sessions,
+      response?.body?.items,
+      response?.items,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) return candidate;
+    }
+    return [];
+  }
+
+  function firstSessionID(response) {
+    for (const session of sessionsFromResponse(response)) {
+      const id = configuredValue(session?.id, configuredValue(session?.session_id, ""));
+      if (id) return id;
+    }
+    return "";
+  }
+
+  async function ensureCommandAuth(source, action, state = null, resolved = null) {
+    let auth = await getAuthStatus();
+    if (!auth || auth.ok !== true || auth.logged_in !== true) {
+      await maybeLogCommandResult("info", "Opening browser for Distlang login", { source, action, state, distlang: resolved });
+      await loginWithDistlang();
+      auth = await getAuthStatus();
+    }
+    return auth;
+  }
+
   async function handleDistlangCommand(invocation, source) {
     const now = Date.now();
     if (now - commandHandledAt < 250) {
@@ -98,11 +169,11 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
     commandHandledAt = now;
     const requestedAction = configuredValue(invocation.action, configuredValue(invocation.args[0], "status")).toLowerCase();
     const action = requestedAction === "login" ? "start" : requestedAction === "logout" ? "stop" : requestedAction;
-    if (!["status", "start", "stop"].includes(action)) {
-      await maybeLogCommandResult("warn", "Unknown Distlang command. Use /distlang-status, /distlang-start, or /distlang-stop", {
+    if (!["status", "start", "stop", "view"].includes(action)) {
+      await maybeLogCommandResult("warn", "Unknown Distlang command. Use /distlang-status, /distlang-start, /distlang-stop, or /distlang-view", {
         source,
         action: requestedAction,
-        command_hint: "/distlang-status | /distlang-start | /distlang-stop",
+        command_hint: "/distlang-status | /distlang-start | /distlang-stop | /distlang-view",
       });
       return;
     }
@@ -118,12 +189,7 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
         return;
       }
       try {
-        auth = await getAuthStatus();
-        if (!auth || auth.ok !== true || auth.logged_in !== true) {
-          await maybeLogCommandResult("info", "Opening browser for Distlang login", { source, action, state, distlang: resolved });
-          await loginWithDistlang();
-          auth = await getAuthStatus();
-        }
+        auth = await ensureCommandAuth(source, action, state, resolved);
       } catch (error) {
         await maybeLogCommandResult("warn", "Distlang uploads enabled, but auth check failed", { source, action, state, distlang: resolved, error: String(error) });
         return;
@@ -151,6 +217,48 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
       return;
     }
 
+    if (action === "view") {
+      const state = await readPluginState();
+      let resolved = null;
+      let auth = null;
+      let sessions = null;
+      try {
+        resolved = await resolveDistlangBinary({ installIfMissing: true });
+        auth = await ensureCommandAuth(source, action, state, resolved);
+        sessions = await fetchAgentDebuggerSessions();
+      } catch (error) {
+        await maybeLogCommandResult("warn", "Unable to open Distlang Agent Debugger session", { source, action, state, distlang: resolved, error: String(error) });
+        return;
+      }
+      const sessionID = commandArgument(invocation, action) || firstSessionID(sessions);
+      const url = sessionUrl(sessionID);
+      if (!url) {
+        await maybeLogCommandResult("warn", "No uploaded OpenCode Agent Debugger session found yet", {
+          source,
+          action,
+          state,
+          distlang: resolved,
+          auth,
+          sessions,
+          command_hint: "Run a prompt first, wait for upload, then run /distlang-view again",
+        });
+        return;
+      }
+      const opened = await openUrl(url);
+      await maybeLogCommandResult("info", `Open Distlang Agent Debugger session: ${url}`, {
+        source,
+        action,
+        state,
+        distlang: resolved,
+        auth,
+        session_id: sessionID,
+        url,
+        opened,
+        sessions,
+      });
+      return;
+    }
+
     const state = await readPluginState();
     let resolved = null;
     let auth = null;
@@ -171,7 +279,7 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
       auth,
       sessions,
       error: resolutionError,
-      command_hint: "/distlang-status | /distlang-start | /distlang-stop",
+      command_hint: "/distlang-status | /distlang-start | /distlang-stop | /distlang-view",
     });
   }
 

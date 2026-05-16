@@ -22,6 +22,12 @@ test("extracts explicit distlang slash commands", () => {
     raw: "/distlang-status",
     action: "status",
   });
+  assert.deepEqual(extractDistlangInvocation({ text: "/distlang-view ses_123" }), {
+    name: "distlang",
+    args: ["ses_123"],
+    raw: "/distlang-view ses_123",
+    action: "view",
+  });
 });
 
 test("keeps legacy distlang subcommand parsing", () => {
@@ -29,6 +35,11 @@ test("keeps legacy distlang subcommand parsing", () => {
     name: "distlang",
     args: ["start"],
     raw: "/distlang start",
+  });
+  assert.deepEqual(extractDistlangInvocation({ text: "/distlang view ses_123" }), {
+    name: "distlang",
+    args: ["view", "ses_123"],
+    raw: "/distlang view ses_123",
   });
   assert.equal(extractDistlangInvocation({ text: "/distlang-restart" }), null);
 });
