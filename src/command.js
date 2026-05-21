@@ -78,7 +78,7 @@ function distlangInvocation(parsed) {
     return parsed;
   }
   const action = parsed.name.startsWith("distlang-") ? parsed.name.slice("distlang-".length) : "";
-  if (action === "start" || action === "stop" || action === "status" || action === "view") {
+  if (action === "start" || action === "stop" || action === "status" || action === "view" || action === "view-local") {
     return {
       ...parsed,
       name: "distlang",

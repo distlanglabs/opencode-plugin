@@ -1,6 +1,6 @@
 import { createRecorder, extractSessionTitle } from "./recorder.js";
 import { extractDistlangInvocation } from "./command.js";
-import { distlangCommandInfo, fetchAgentDebuggerSessions, getAuthStatus, loginWithDistlang, logoutWithDistlang, resolveDistlangBinary, uploadAgentDebuggerPayload } from "./distlang.js";
+import { distlangCommandInfo, ensureLocalAgentDebugger, fetchAgentDebuggerSessions, fetchLocalAgentDebuggerSessions, getAuthStatus, localAgentDebuggerUrl, loginWithDistlang, logoutWithDistlang, resolveDistlangBinary, uploadAgentDebuggerPayload, uploadLocalAgentDebuggerPayload } from "./distlang.js";
 import { pluginStatePath, readPluginState, writePluginState } from "./state.js";
 import { appendFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -173,11 +173,11 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
     commandHandledAt = now;
     const requestedAction = configuredValue(invocation.action, configuredValue(invocation.args[0], "status")).toLowerCase();
     const action = requestedAction === "login" ? "start" : requestedAction === "logout" ? "stop" : requestedAction;
-    if (!["status", "start", "stop", "view"].includes(action)) {
-      await maybeLogCommandResult("warn", "Unknown Distlang command. Use /distlang-status, /distlang-start, /distlang-stop, or /distlang-view", {
+    if (!["status", "start", "stop", "view", "view-local"].includes(action)) {
+      await maybeLogCommandResult("warn", "Unknown Distlang command. Use /distlang-status, /distlang-start, /distlang-stop, /distlang-view, or /distlang-view-local", {
         source,
         action: requestedAction,
-        command_hint: "/distlang-status | /distlang-start | /distlang-stop | /distlang-view",
+        command_hint: "/distlang-status | /distlang-start | /distlang-stop | /distlang-view | /distlang-view-local",
       });
       return;
     }
@@ -218,6 +218,38 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
       } catch (error) {
         await maybeLogCommandResult("warn", "Distlang Agent Debugger uploads disabled, but sign out failed", { source, action, state, error: String(error) });
       }
+      return;
+    }
+
+    if (action === "view-local") {
+      const state = await writePluginState(true);
+      authWarningLogged = false;
+      let local = null;
+      let sessions = null;
+      try {
+        local = await ensureLocalAgentDebugger();
+        sessions = await fetchLocalAgentDebuggerSessions().catch((error) => ({ error: String(error) }));
+      } catch (error) {
+        await maybeLogCommandResult("warn", "Unable to start local Distlang Agent Debugger", {
+          source,
+          action,
+          state,
+          error: String(error),
+          install_hint: "Install from https://distlang.com/agent-debugger/install or put distlang-agent-debugger on PATH.",
+        });
+        return;
+      }
+      const url = localAgentDebuggerUrl();
+      const opened = await openUrl(url);
+      await maybeLogCommandResult("info", `Open local Distlang Agent Debugger: ${url}`, {
+        source,
+        action,
+        state,
+        local,
+        sessions,
+        url,
+        opened,
+      });
       return;
     }
 
@@ -290,6 +322,59 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
     });
   }
 
+  async function uploadPayloadToLocal(payload, sessionID, result, reason) {
+    let local = null;
+    try {
+      local = await ensureLocalAgentDebugger();
+      const response = await uploadLocalAgentDebuggerPayload(payload);
+      await debugLog("Local Agent Debugger upload response received", { sessionID, result, reason, response, local });
+      if (!response.ok) {
+        await log("warn", "Local Agent Debugger upload failed", { sessionID, result, reason, response, local });
+        return false;
+      }
+      if (reason !== "cloud_auth_unavailable") {
+        await maybeLogCommandResult("info", "Saved Agent Debugger session locally", { sessionID, result, reason, local, response });
+      } else {
+        await debugLog("Agent Debugger session saved locally because cloud auth is unavailable", { sessionID, result, local, response });
+      }
+      return true;
+    } catch (error) {
+      await log("warn", "Local Agent Debugger upload failed", {
+        sessionID,
+        result,
+        reason,
+        local,
+        error: String(error),
+        install_hint: "Run /distlang-view-local after installing distlang-agent-debugger.",
+      });
+      return false;
+    }
+  }
+
+  async function uploadPayload(payload, sessionID, result) {
+    if (!(await uploadEnabled())) {
+      await debugLog("Distlang Agent Debugger uploads are disabled", { state: await readPluginState(), sessionID, result });
+      return;
+    }
+    if (!(await ensureAuthStatus())) {
+      await uploadPayloadToLocal(payload, sessionID, result, "cloud_auth_unavailable");
+      return;
+    }
+    try {
+      const response = await uploadAgentDebuggerPayload(payload);
+      await debugLog("Agent Debugger upload response received", { sessionID, result, response });
+      if (!response.ok) {
+        await log("warn", "Agent Debugger upload failed", { sessionID, result, response });
+        await uploadPayloadToLocal(payload, sessionID, result, "cloud_upload_failed");
+        return;
+      }
+      await debugLog("Agent Debugger session uploaded", { sessionID, result, response });
+    } catch (error) {
+      await log("warn", "Agent Debugger upload failed; trying local fallback", { sessionID, result, error: String(error) });
+      await uploadPayloadToLocal(payload, sessionID, result, "cloud_upload_error");
+    }
+  }
+
   async function ensureAuthStatus() {
     if (!(await uploadEnabled())) {
       await debugLog("Distlang Agent Debugger uploads are disabled", { state: await readPluginState() });
@@ -344,21 +429,7 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
       steps: Array.isArray(payload.interactions) ? payload.interactions.reduce((total, interaction) => total + (Array.isArray(interaction.steps) ? interaction.steps.length : 0), 0) : 0,
       project: payload.project,
     });
-    if (!(await ensureAuthStatus())) {
-      await debugLog("Skipping AI debugger upload because auth is unavailable", { sessionID });
-      return;
-    }
-    try {
-      const response = await uploadAgentDebuggerPayload(payload);
-      await debugLog("Agent Debugger upload response received", { sessionID, response });
-      if (!response.ok) {
-        await log("warn", "Agent Debugger upload failed", { sessionID, response });
-        return;
-      }
-      await debugLog("Agent Debugger session uploaded", { sessionID, response });
-    } catch (error) {
-      await log("warn", "Agent Debugger upload failed", { sessionID, error: String(error) });
-    }
+    await uploadPayload(payload, sessionID, result);
   }
 
   async function uploadSessionSnapshot(sessionID, result = "success") {
@@ -381,21 +452,7 @@ export const DistlangAgentDebugger = async ({ project, directory, client }) => {
       steps: Array.isArray(payload.interactions) ? payload.interactions.reduce((total, interaction) => total + (Array.isArray(interaction.steps) ? interaction.steps.length : 0), 0) : 0,
       project: payload.project,
     });
-    if (!(await ensureAuthStatus())) {
-      await debugLog("Skipping AI debugger snapshot upload because auth is unavailable", { sessionID });
-      return;
-    }
-    try {
-      const response = await uploadAgentDebuggerPayload(payload);
-      await debugLog("Agent Debugger snapshot upload response received", { sessionID, response });
-      if (!response.ok) {
-        await log("warn", "Agent Debugger snapshot upload failed", { sessionID, response });
-        return;
-      }
-      await debugLog("Agent Debugger session snapshot uploaded", { sessionID, response });
-    } catch (error) {
-      await log("warn", "Agent Debugger snapshot upload failed", { sessionID, error: String(error) });
-    }
+    await uploadPayload(payload, sessionID, result);
   }
 
   async function refreshSessionMetadata(sessionID, options = {}) {

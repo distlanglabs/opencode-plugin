@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 
 let managedInstallPromise = null;
 let resolvedBinaryPromise = null;
+let localDebuggerStartPromise = null;
 
 function configuredValue(value, fallback = "") {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
@@ -29,6 +30,14 @@ function managedInstallDir() {
 
 function managedBinaryPath() {
   return join(managedInstallDir(), process.platform === "win32" ? "distlang.exe" : "distlang");
+}
+
+function localDebuggerBaseUrl() {
+  return configuredValue(process.env.DISTLANG_AGENT_DEBUGGER_BASE_URL, "http://127.0.0.1:4817").replace(/\/+$/, "");
+}
+
+function localDebuggerManagedBinaryPath() {
+  return join(homedir(), ".cache", "distlang", "agent-debugger", "bin", process.platform === "win32" ? "distlang-agent-debugger.exe" : "distlang-agent-debugger");
 }
 
 async function pathHasExecutable(filePath) {
@@ -52,6 +61,26 @@ async function findDistlangOnPath() {
       continue;
     }
     for (const executableName of executableNames) {
+      const candidate = join(base, executableName);
+      if (await pathHasExecutable(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return "";
+}
+
+async function findExecutableOnPath(names) {
+  const pathValue = configuredValue(process.env.PATH, "");
+  if (!pathValue) {
+    return "";
+  }
+  for (const part of pathValue.split(process.platform === "win32" ? ";" : ":")) {
+    const base = configuredValue(part, "");
+    if (!base) {
+      continue;
+    }
+    for (const executableName of names) {
       const candidate = join(base, executableName);
       if (await pathHasExecutable(candidate)) {
         return candidate;
@@ -169,7 +198,83 @@ export function distlangCommandInfo() {
     bin: distlangBinary(),
     managed_bin: managedBinaryPath(),
     auto_install_disabled: autoInstallDisabled(),
+    local_debugger_base_url: localDebuggerBaseUrl(),
+    local_debugger_managed_bin: localDebuggerManagedBinaryPath(),
   };
+}
+
+export async function resolveLocalDebuggerBinary() {
+  const explicit = configuredValue(process.env.DISTLANG_AGENT_DEBUGGER_BIN, "");
+  if (explicit) {
+    await fs.access(explicit, fs.constants.X_OK);
+    return { path: explicit, source: "env" };
+  }
+  const fromPath = await findExecutableOnPath(process.platform === "win32" ? ["distlang-agent-debugger.exe", "distlang-agent-debugger.cmd", "distlang-agent-debugger.bat"] : ["distlang-agent-debugger"]);
+  if (fromPath) {
+    return { path: fromPath, source: "path" };
+  }
+  const managedPath = localDebuggerManagedBinaryPath();
+  if (await pathHasExecutable(managedPath)) {
+    return { path: managedPath, source: "managed" };
+  }
+  const error = new Error("distlang-agent-debugger binary not found");
+  error.code = "ENOENT";
+  throw error;
+}
+
+export function localAgentDebuggerUrl() {
+  return `${localDebuggerBaseUrl()}/agent-debugger`;
+}
+
+export function localAgentDebuggerSessionUrl(sessionID) {
+  const id = configuredValue(sessionID, "");
+  return id ? `${localDebuggerBaseUrl()}/agent-debugger/sessions/${encodeURIComponent(id)}` : "";
+}
+
+export async function localAgentDebuggerHealth() {
+  const response = await fetch(`${localDebuggerBaseUrl()}/health`, { signal: AbortSignal.timeout(1500) });
+  if (!response.ok) {
+    throw new Error(`local Agent Debugger health returned ${response.status}`);
+  }
+  return response.json().catch(() => ({ ok: true }));
+}
+
+export async function ensureLocalAgentDebugger() {
+  try {
+    await localAgentDebuggerHealth();
+    return { running: true, started: false, base_url: localDebuggerBaseUrl() };
+  } catch {
+    // Start below.
+  }
+  if (!localDebuggerStartPromise) {
+    localDebuggerStartPromise = (async () => {
+      const resolved = await resolveLocalDebuggerBinary();
+      const child = spawn(resolved.path, ["serve", "--no-open"], {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      });
+      child.on("error", () => undefined);
+      child.unref();
+      const deadline = Date.now() + 8000;
+      let lastError = null;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        try {
+          await localAgentDebuggerHealth();
+          return { running: true, started: true, base_url: localDebuggerBaseUrl(), debugger: resolved };
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw new Error(`local Agent Debugger did not become healthy: ${lastError ? String(lastError) : "timeout"}`);
+    })();
+  }
+  try {
+    return await localDebuggerStartPromise;
+  } finally {
+    localDebuggerStartPromise = null;
+  }
 }
 
 export async function getAuthStatus() {
@@ -202,6 +307,29 @@ export async function uploadAgentDebuggerPayload(payload) {
   } finally {
     await fs.unlink(tempFile).catch(() => {});
   }
+}
+
+export async function uploadLocalAgentDebuggerPayload(payload) {
+  const response = await fetch(`${localDebuggerBaseUrl()}/agent-debugger/v1/ingest`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(async () => ({ text: await response.text().catch(() => "") }));
+  return {
+    ok: response.ok,
+    status: response.status,
+    body,
+    ...body,
+  };
+}
+
+export async function fetchLocalAgentDebuggerSessions() {
+  const response = await fetch(`${localDebuggerBaseUrl()}/agent-debugger/v1/sessions?source=opencode&limit=5`);
+  if (!response.ok) {
+    throw new Error(`local Agent Debugger sessions returned ${response.status}`);
+  }
+  return response.json();
 }
 
 export async function fetchAgentDebuggerSessions() {

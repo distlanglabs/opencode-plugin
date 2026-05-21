@@ -97,6 +97,7 @@ The plugin watches for these commands:
 - `/distlang-stop`
 - `/distlang-status`
 - `/distlang-view [session-id]`
+- `/distlang-view-local`
 
 The legacy compact command also remains supported:
 
@@ -125,8 +126,11 @@ Commands:
 - `/distlang-start`: sign in if needed and enable Agent Debugger uploads
 - `/distlang-stop`: disable Agent Debugger uploads and sign out of Distlang
 - `/distlang-view [session-id]`: open the latest uploaded OpenCode Agent Debugger session, the provided session id, or the Agent Debugger overview when no session is available yet
+- `/distlang-view-local`: start/open the local Agent Debugger without requiring Distlang login
 
-Legacy aliases remain available: `/distlang status`, `/distlang start`, `/distlang stop`, `/distlang login`, and `/distlang logout`.
+Legacy aliases remain available: `/distlang status`, `/distlang start`, `/distlang stop`, `/distlang login`, `/distlang logout`, and `/distlang view-local`.
+
+If Distlang cloud login is unavailable, the plugin attempts to save session snapshots to the local Agent Debugger instead of dropping them. The local fallback expects `distlang-agent-debugger` to be installed and available on `PATH`, or configured with `DISTLANG_AGENT_DEBUGGER_BIN`.
 
 ## Debugging
 
@@ -140,6 +144,8 @@ Useful overrides:
 DISTLANG_BIN=/path/to/distlang opencode
 DISTLANG_STORE_BASE_URL=https://api-staging.distlang.com opencode
 DISTLANG_AUTH_BASE_URL=https://auth-staging.distlang.com opencode
+DISTLANG_AGENT_DEBUGGER_BASE_URL=http://127.0.0.1:4817 opencode
+DISTLANG_AGENT_DEBUGGER_BIN=/path/to/distlang-agent-debugger opencode
 DISTLANG_OPENCODE_NO_INSTALL=1 opencode
 DISTLANG_OPENCODE_INSTALL_DIR=/tmp/distlang-plugin-bin opencode
 DISTLANG_OPENCODE_STATE_FILE=/tmp/distlang-plugin-state.json opencode
